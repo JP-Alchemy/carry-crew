@@ -336,7 +336,7 @@ function decorMesh(d: Decor): THREE.Object3D {
       for (let x = -5.5; x <= 5.5; x += 1) g.add(box(0xffffff, 0.5, 0.035, 0.08, x, 0.02, 0));
       break;
     case 'headboard':
-      g.add(box(0xf4f4f8, 0.5, 3, 3.4, -0.25, 1.5, -0.9));
+      g.add(box(0xffb3c7, 0.4, 2.2, 3.4, -0.25, 1.1, -1.4));
       break;
     case 'doghead': {
       const c = toon(0xc58f5a);

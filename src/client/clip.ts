@@ -49,6 +49,10 @@ export async function exportClip(renderer: GameRenderer, frames: Snapshot[], tit
   out.width = w;
   out.height = h;
   const g = out.getContext('2d')!;
+  // Keep the canvas in the document (off-screen) so every browser keeps feeding the stream.
+  out.style.cssText = 'position:fixed;left:-99999px;top:0;pointer-events:none';
+  document.body.appendChild(out);
+  renderer.snapCamera();
   const stream = out.captureStream(FPS);
   const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find((m) => MediaRecorder.isTypeSupported(m)) ?? '';
   const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 4_000_000 } : undefined);
@@ -83,6 +87,8 @@ export async function exportClip(renderer: GameRenderer, frames: Snapshot[], tit
   }
   rec.stop();
   await done;
+  out.remove();
+  renderer.snapCamera();
   return new Blob(chunks, { type: mime || 'video/webm' });
 }
 

@@ -983,7 +983,7 @@ export class Sim {
       const a = b.rotation();
       const ax = pos.x + h.grab!.local.x * Math.cos(a) - h.grab!.local.y * Math.sin(a);
       const ay = pos.y + h.grab!.local.x * Math.sin(a) + h.grab!.local.y * Math.cos(a);
-      if (Math.hypot(ax - (t.x + h.grab!.side * C.PLAYER_R), ay - (t.y + CARRY_LIFT)) > 1.25) {
+      if (Math.hypot(ax - (t.x + h.grab!.side * C.PLAYER_R), ay - (t.y + CARRY_LIFT)) > 1.5) {
         this.release(h, true);
         h.regrabCd = 0.5;
         this.events.push({ e: 'slip', p: this.players.indexOf(h) });

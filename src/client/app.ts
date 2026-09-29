@@ -62,6 +62,7 @@ export class App {
   private hudBuiltFor: Session | null = null;
   private onlineOk: boolean | null = null;
   private localCount = 1;
+  private repaired = false;
 
   constructor(root: HTMLElement) {
     const canvas = root.querySelector<HTMLCanvasElement>('#game')!;
@@ -132,9 +133,12 @@ export class App {
 
   // ------------------------------------------------------------------ main loop
 
+  /** Dev/testing aid: ?simspeed=4 runs local games faster. */
+  private simSpeed = Math.max(1, Math.min(8, Number(new URLSearchParams(location.search).get('simspeed')) || 1));
+
   private loop(tms: number) {
     const t = tms / 1000;
-    const dt = Math.min(0.1, this.lastT ? t - this.lastT : 1 / 60);
+    const dt = Math.min(0.1, this.lastT ? t - this.lastT : 1 / 60) * (this.session?.online ? 1 : this.simSpeed);
     this.lastT = t;
     this.t += dt;
     if (this.session && !this.busy) {
@@ -270,6 +274,8 @@ export class App {
   }
 
   private endSession() {
+    document.body.classList.remove('results');
+    this.repaired = false;
     this.session?.dispose();
     this.session = null;
     this.lastSnap = null;
@@ -300,6 +306,8 @@ export class App {
     }
     const localSlots = crew.map((c, i) => (!c.bot ? i : -1)).filter((i) => i >= 0);
     const s = new LocalSession(spec, crew, localSlots);
+    // Dev/testing aid: ?autopilot=1 lets bots drive your character too.
+    if (new URLSearchParams(location.search).has('autopilot')) localSlots.forEach((i) => s.sim.setBot(i, true));
     s.onResult = (r) => this.finish(r);
     this.session = s;
     this.spec = spec;
@@ -566,8 +574,8 @@ export class App {
         </div>
         <div class="row small">
           <button class="courses">🗺️ Courses</button>
-          <button class="wardrobe">🎩 Wardrobe</button>
-          <button class="board">📊 Daily board</button>
+          <button class="wardrobebtn">🎩 Wardrobe</button>
+          <button class="boardbtn">📊 Daily board</button>
           <button class="settings">⚙️ Settings</button>
         </div>
         <div class="online-pill">${this.onlineOk === null ? '…' : this.onlineOk ? '● online' : '○ offline: bots only'}</div>
@@ -581,8 +589,8 @@ export class App {
     s.querySelector('.daily')!.addEventListener('click', () => this.startLocal(daily, 'daily', 1, 2));
     s.querySelector('.weekly')!.addEventListener('click', () => this.startLocal(weeklySpec(), 'weekly', 1, 3));
     s.querySelector('.courses')!.addEventListener('click', () => this.showCourses('solo'));
-    s.querySelector('.wardrobe')!.addEventListener('click', () => this.showWardrobe());
-    s.querySelector('.board')!.addEventListener('click', () => this.showBoard());
+    s.querySelector('.wardrobebtn')!.addEventListener('click', () => this.showWardrobe());
+    s.querySelector('.boardbtn')!.addEventListener('click', () => this.showBoard());
     s.querySelector('.settings')!.addEventListener('click', () => this.showSettings());
     s.querySelector('.reroll')!.addEventListener('click', () => {
       p.name = randomName();
@@ -767,6 +775,7 @@ export class App {
       <div class="panel">
         <h2>${sess.online ? '⏸ Menu (the game keeps going!)' : '⏸ Paused'}</h2>
         <button class="big resume">▶ Resume</button>
+        ${sess instanceof LocalSession && !this.repaired && sess.sim.damage >= 10 ? '<button class="repair">📺 Patch it up (−20% damage)</button>' : ''}
         <button class="clip" ${clipSupported() && this.clip.length ? '' : 'disabled'}>🎬 Save last 15 seconds as a clip</button>
         ${
           others.length
@@ -784,6 +793,14 @@ export class App {
         <button class="quit">🚪 Quit to menu</button>
       </div>`);
     s.querySelector('.resume')!.addEventListener('click', () => this.pause(false));
+    s.querySelector('.repair')?.addEventListener('click', async () => {
+      if (!(await platform.rewardedBreak()) || !(sess instanceof LocalSession)) return;
+      this.repaired = true;
+      sess.sim.damage = Math.max(0, sess.sim.damage - 20);
+      track('rewarded_repair', { course: sess.course.id });
+      this.toast('Good as new(ish)! 🩹');
+      this.pause(false);
+    });
     s.querySelector('.clip')!.addEventListener('click', () => this.saveClip());
     s.querySelector('.settings')!.addEventListener('click', () => this.showSettings());
     s.querySelector('.quit')!.addEventListener('click', () => {
@@ -837,6 +854,7 @@ export class App {
   }
 
   private showResults(r: RunResult, newBest: boolean) {
+    document.body.classList.add('results');
     const sess = this.session;
     const c = sess?.course;
     const icon = c ? CARGO_ICON[c.cargo] : '🎂';
@@ -864,7 +882,7 @@ export class App {
         <div class="row small">
           <button class="clip" ${clipSupported() && this.clip.length ? '' : 'disabled'}>🎬 Save clip</button>
           <button class="double">📺 Double coins</button>
-          ${isDaily ? '<button class="board">📊 Leaderboard</button>' : ''}
+          ${isDaily ? '<button class="boardbtn">📊 Leaderboard</button>' : ''}
           <button class="menu">🏠 Menu</button>
         </div>
       </div>`);
@@ -887,7 +905,7 @@ export class App {
     });
     s.querySelector('.requeue')?.addEventListener('click', () => this.afterBreak(() => this.quickCrew()));
     s.querySelector('.clip')!.addEventListener('click', () => this.saveClip());
-    s.querySelector('.board')?.addEventListener('click', () => this.showBoard());
+    s.querySelector('.boardbtn')?.addEventListener('click', () => this.showBoard());
     s.querySelector('.menu')!.addEventListener('click', () => this.afterBreak(() => {
       this.endSession();
       this.showMenu();

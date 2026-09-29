@@ -62,7 +62,7 @@ export class LocalSession implements Session {
 
   frame(dt: number, inputs: PlayerInput[]): Snapshot {
     this.localSlots.forEach((slot, k) => inputs[k] && this.sim.setInput(slot, inputs[k]));
-    this.acc = Math.min(this.acc + dt, DT * 4);
+    this.acc = Math.min(this.acc + dt, Math.max(DT * 4, dt));
     while (this.acc >= DT) {
       this.sim.step();
       this.acc -= DT;

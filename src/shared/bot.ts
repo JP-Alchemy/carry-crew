@@ -92,7 +92,8 @@ function dangerAhead(sim: Sim, lo: number, hi: number, y: number, dir: number, s
       }
     }
   }
-  const lookT = 2.8;
+  const lookT = 4.5;
+  speed *= 0.8; // we rarely keep full pace: plan for a slower crossing
   for (const m of sim.movers) {
     if (!m.def.knock || m.def.botIgnore) continue;
     const path = m.def.path;

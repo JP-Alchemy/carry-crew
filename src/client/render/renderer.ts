@@ -87,6 +87,11 @@ export class GameRenderer {
     this.resize();
   }
 
+  /** Jump the camera straight to its target on the next frame (no easing). */
+  snapCamera() {
+    this.camInit = false;
+  }
+
   resize() {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;

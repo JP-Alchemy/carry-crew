@@ -291,13 +291,16 @@ export class CargoView {
       this.parts.push(g);
     } else if (kind === 'fishtank') {
       const g = new THREE.Group();
-      g.add(mesh(new THREE.BoxGeometry(1.3, 0.95, 0.9), toon(0xbfeaff, { opacity: 0.3 })));
+      g.add(mesh(new THREE.BoxGeometry(1.3, 0.95, 0.9), toon(0xbfeaff, { opacity: 0.35 })));
+      // Chunky frame so the tank reads clearly against any background
+      for (const x of [-0.64, 0.64]) g.add(mesh(new THREE.BoxGeometry(0.06, 0.97, 0.94), toon(0x2b6cb0), x, 0, 0));
+      g.add(mesh(new THREE.BoxGeometry(1.34, 0.06, 0.94), toon(0x2b6cb0), 0, 0.46, 0));
       g.add(mesh(new THREE.BoxGeometry(1.32, 0.06, 0.92), toon(0x2b6cb0), 0, -0.45, 0));
       g.add(mesh(new THREE.BoxGeometry(1.24, 0.1, 0.84), toon(0xe6d3a3), 0, -0.38, 0));
-      this.water = mesh(new THREE.BoxGeometry(1.24, 0.6, 0.84).translate(0, 0.3, 0), toonUnique(0x4db8ff, { opacity: 0.55 }), 0, -0.33, 0);
+      this.water = mesh(new THREE.BoxGeometry(1.22, 0.6, 0.82).translate(0, 0.3, 0), toonUnique(0x2f9bff, { opacity: 0.7 }), 0, -0.33, 0);
       g.add(this.water);
       const fish = new THREE.Group();
-      fish.add(mesh(SPHERE(), toon(0xff8a1f), 0, 0, 0, 0.16, 0.1, 0.07));
+      fish.add(mesh(SPHERE(), toon(0xff8a1f), 0, 0, 0, 0.18, 0.12, 0.08));
       fish.add(mesh(CONE(), toon(0xff8a1f), -0.2, 0, 0, 0.08, 0.14, 0.03).rotateZ(Math.PI / 2));
       fish.add(mesh(SPHERE(), toon(0x111111), 0.1, 0.03, 0.06, 0.02, 0.02, 0.02));
       g.add(fish);
@@ -357,7 +360,7 @@ export class CargoView {
       const level = Math.max(0.15, 1 - damage / 120);
       this.water.scale.y = level;
       this.water.rotation.z = -slosh * 0.35;
-      this.fish.position.set(Math.sin(t * 1.3) * 0.4, -0.2 + level * 0.25 + Math.sin(t * 3) * 0.05, 0.05);
+      this.fish.position.set(Math.sin(t * 1.3) * 0.4, -0.2 + level * 0.25 + Math.sin(t * 3) * 0.05, 0.46);
       this.fish.rotation.y = Math.cos(t * 1.3) > 0 ? 0 : Math.PI;
     } else if (this.kind === 'vase') {
       const n = Math.floor(damage / 22);
