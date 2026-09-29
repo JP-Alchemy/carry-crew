@@ -3,7 +3,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { BODY_COLORS, ROPES } from '../../shared/cosmetics';
 import { PLAYER_R } from '../../shared/constants';
 import type { CargoKind, Look, PlayerSnap } from '../../shared/types';
-import { CONE, CYL, SPHERE, geo, mesh, toon, toonUnique } from './materials';
+import { CONE, CYL, SPHERE, disposeTree, geo, mesh, toon, toonUnique } from './materials';
 
 const R = PLAYER_R;
 
@@ -112,7 +112,10 @@ export class CharacterView {
   }
 
   private build() {
+    disposeTree(this.tilt);
+    this.arms.forEach((a) => disposeTree(a));
     this.tilt.clear();
+    this.arms.forEach((a) => this.group.remove(a));
     const col = BODY_COLORS[this.look.body] ?? BODY_COLORS[0];
     this.body = new THREE.Mesh(bodyGeometry(this.look.shape), toon(col));
     this.body.castShadow = true;

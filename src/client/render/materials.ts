@@ -62,6 +62,23 @@ export function geo<T extends THREE.BufferGeometry>(key: string, make: () => T):
   return g;
 }
 
+/** Free a subtree's GPU resources, leaving the shared cached geometries/materials alone. */
+export function disposeTree(root: THREE.Object3D) {
+  const cachedMats = new Set(cache.values());
+  const cachedGeos = new Set(geoCache.values());
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh && !(o as THREE.Points).isPoints) return;
+    if (m.geometry && !cachedGeos.has(m.geometry)) m.geometry.dispose();
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    for (const mat of mats) {
+      if (!mat || cachedMats.has(mat)) continue;
+      (mat as THREE.MeshBasicMaterial).map?.dispose();
+      mat.dispose();
+    }
+  });
+}
+
 export const BOX = () => geo('box', () => new THREE.BoxGeometry(1, 1, 1));
 export const SPHERE = () => geo('sphere', () => new THREE.SphereGeometry(1, 16, 12));
 export const CYL = () => geo('cyl', () => new THREE.CylinderGeometry(1, 1, 1, 16));

@@ -33,7 +33,7 @@ npm start          # http://localhost:8787
 | `npx tsx scripts/botrun.ts all` | Bot-only crews play every course headless and report results |
 | `npx tsx scripts/piecetest.ts` | Bot crews try every course piece at every difficulty |
 
-Server environment: `PORT` (8787), `HOST`, `DATA_DIR` (`./data`: leaderboard, invites, analytics, reports), `STATIC_DIR` (`./dist/client`).
+Server environment: `PORT` (8787), `HOST`, `DATA_DIR` (`./data`: leaderboard, invites, analytics, reports), `STATIC_DIR` (`./dist/client`), `MAX_SOCKETS_PER_IP` (32, roomy because a whole school shares one address), `MAX_RUNNING_ROOMS` (200).
 
 The client works without a server: solo, couch and daily play run entirely in the browser, and online modes fall back to bots. For portal builds hosted elsewhere, set `VITE_SERVER_URL=https://your-server` at build time (or pass `?server=` in the URL).
 

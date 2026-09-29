@@ -118,6 +118,19 @@ describe('simulation', () => {
     expect(sim.cargoPos().y).toBeGreaterThan(-1);
   });
 
+  it('bots do not all jump when the crew respawns', () => {
+    const sim = new Sim(buildTestCourse('kitchen', ['kSink'], 0), bots(3));
+    run(sim, 6); // bots jump around a bit, so their press counters move
+    sim.cargo[0].body.setTranslation({ x: sim.course.cargoStart.x, y: -9 }, true);
+    let jumps = 0;
+    for (let k = 0; k < 3; k++) {
+      sim.step();
+      jumps += sim.snapshot().events.filter((e) => e.e === 'jump').length;
+    }
+    expect(jumps).toBe(0);
+    sim.free();
+  });
+
   it('hard landings hurt the cargo, gentle ones do not', () => {
     const sim = new Sim(buildCourse({ biome: 'kitchen', index: 0 }), bots(1));
     sim.setBot(0, false);

@@ -60,7 +60,14 @@ export class LocalSession implements Session {
     this.sim = new Sim(this.course, { crew: crew.map((c) => ({ bot: c.bot })) });
   }
 
+  private rebased = false;
+
   frame(dt: number, inputs: PlayerInput[]): Snapshot {
+    if (!this.rebased && inputs.length) {
+      // Devices keep their press counters between runs: start this run from where they are.
+      this.rebased = true;
+      this.localSlots.forEach((slot, k) => inputs[k] && this.sim.rebaseInput(slot, inputs[k]));
+    }
     this.localSlots.forEach((slot, k) => inputs[k] && this.sim.setInput(slot, inputs[k]));
     this.acc = Math.min(this.acc + dt, Math.max(DT * 4, dt));
     while (this.acc >= DT) {
@@ -149,6 +156,8 @@ export class OnlineSession implements Session {
     if (m.t === 'snap') {
       const s = m.s;
       this.pendingEvents.push(...s.events);
+      // Tab hidden for a while? Don't replay minutes of sound and confetti at once.
+      if (this.pendingEvents.length > 120) this.pendingEvents.splice(0, this.pendingEvents.length - 120);
       const est = s.t - this.clock;
       this.offset = this.offset === null ? est : this.offset + (est - this.offset) * 0.05;
       if (est < this.offset) this.offset = est; // snap forward on late packets

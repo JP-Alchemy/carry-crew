@@ -336,7 +336,9 @@ export class Sim {
       p.diveT = 0;
       p.panicUsed = false;
       p.stamina = C.STAMINA_MAX;
-      p.brain = newBotBrain(k);
+      // Fresh plan, but keep the press counters in step with the sim.
+      const { jumpN, diveN, seenHumanJump } = p.brain;
+      p.brain = { ...newBotBrain(k), jumpN, diveN, seenHumanJump };
     });
     for (const s of this.spans) this.layRope(s);
     const cx = i === 0 ? this.course.cargoStart.x : cp.x + 1.6;
@@ -391,15 +393,24 @@ export class Sim {
     if (p) p.input = input;
   }
 
+  /** Align press counters with a device's current ones so a new run doesn't start with a jump. */
+  rebaseInput(i: number, input: PlayerInput) {
+    const p = this.players[i];
+    if (!p) return;
+    p.lastJumpN = input.jumpN;
+    p.lastDiveN = input.diveN;
+    p.lastUp = input.up;
+  }
+
   setBot(i: number, bot: boolean) {
     const p = this.players[i];
     if (!p) return;
     p.bot = bot;
     p.brain = newBotBrain(i);
     if (bot) {
-      p.lastJumpN = 0;
-      p.lastDiveN = 0;
-      p.input = emptyInput();
+      p.brain.jumpN = p.lastJumpN;
+      p.brain.diveN = p.lastDiveN;
+      p.input = { ...emptyInput(), jumpN: p.lastJumpN, diveN: p.lastDiveN };
     }
   }
 

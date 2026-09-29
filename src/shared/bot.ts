@@ -182,11 +182,14 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
 
   // ---------------------------------------------------------------- carrying
   if (p.grab?.kind === 'cargo') {
+    const wasWithHuman = br.mode === 'carry-h';
     br.mode = 'carry';
     inp.grab = true;
     let mx: number;
     if (humanHolder) {
       mx = humanHolder.input.mx;
+      if (!wasWithHuman) br.seenHumanJump = humanHolder.lastJumpN; // only react to new jumps
+      br.mode = 'carry-h';
       if (humanHolder.lastJumpN !== br.seenHumanJump) {
         br.seenHumanJump = humanHolder.lastJumpN;
         br.jumpCd = 0;

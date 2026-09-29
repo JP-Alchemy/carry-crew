@@ -9,6 +9,9 @@ import { serveStatic } from './static';
 import { Store } from './store';
 import { WindowLimiter } from './util';
 
+/** Concurrent sockets allowed from one address (a school shares one address: keep it roomy). */
+const MAX_SOCKETS_PER_IP = Number(process.env.MAX_SOCKETS_PER_IP ?? 32);
+
 export interface ServerOptions {
   /** 0 picks a free port. Default: $PORT or 8787. */
   port?: number;
@@ -63,6 +66,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096, perMessageDeflate: false });
   const alive = new WeakMap<WebSocket, boolean>();
+  const perIp = new Map<string, number>();
   server.on('upgrade', (req, socket, head) => {
     let path = '';
     try {
@@ -74,7 +78,20 @@ export async function startServer(opts: ServerOptions = {}): Promise<RunningServ
       socket.destroy();
       return;
     }
+    // A handful of tabs per address is plenty; more is someone trying to spin up simulations.
+    const ip = clientIp(req);
+    if ((perIp.get(ip) ?? 0) >= MAX_SOCKETS_PER_IP) {
+      socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
+      perIp.set(ip, (perIp.get(ip) ?? 0) + 1);
+      ws.once('close', () => {
+        const n = (perIp.get(ip) ?? 1) - 1;
+        if (n <= 0) perIp.delete(ip);
+        else perIp.set(ip, n);
+      });
       alive.set(ws, true);
       ws.on('pong', () => alive.set(ws, true));
       game.accept(ws, clientIp(req));

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { CourseDef, Decor, Snapshot, Solid } from '../../shared/types';
-import { BOX, CONE, CYL, SPHERE, basic, box, geo, mesh, textTexture, toon, toonUnique } from './materials';
+import { BOX, CONE, CYL, SPHERE, basic, box, disposeTree, geo, mesh, textTexture, toon, toonUnique } from './materials';
 
 const BOOK_COLORS = [0xe4572e, 0x29335c, 0xf3a712, 0x669bbc, 0x8cb369, 0xa8201a, 0x7b4b94];
 const BLOCK_COLORS = [0xff595e, 0xffca3a, 0x8ac926, 0x1982c4, 0x6a4c93, 0xff924c];
@@ -677,11 +677,7 @@ export function buildWorld(course: CourseDef, scene: THREE.Scene): WorldView {
     },
     dispose() {
       scene.remove(root);
-      root.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (m.userData.owned) m.geometry.dispose();
-        if (m.material && !Array.isArray(m.material) && (m.material as THREE.MeshBasicMaterial).map) (m.material as THREE.MeshBasicMaterial).map!.dispose();
-      });
+      disposeTree(root);
     },
   };
 }

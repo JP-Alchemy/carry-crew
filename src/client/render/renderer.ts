@@ -3,6 +3,7 @@ import { BODY_COLORS } from '../../shared/cosmetics';
 import { PING_TEXT, QUICK_CHAT, type CourseDef, type CrewMember, type GameEvent, type Snapshot } from '../../shared/types';
 import { CargoView, CharacterView, RopeView } from './actors';
 import { Particles } from './fx';
+import { disposeTree } from './materials';
 import { buildWorld, type WorldView } from './world';
 
 const EMOTE_TEXT: Record<string, string> = { highfive: '✋ High five!', blame: '👉 Your fault!', cheer: '🎉 Woo!', facepalm: '🤦' };
@@ -114,7 +115,11 @@ export class GameRenderer {
 
   setCrew(crew: CrewMember[]) {
     this.crew = crew;
-    while (this.chars.length > crew.length) this.scene.remove(this.chars.pop()!.group);
+    while (this.chars.length > crew.length) {
+      const c = this.chars.pop()!;
+      this.scene.remove(c.group);
+      disposeTree(c.group);
+    }
     crew.forEach((m, i) => {
       if (!this.chars[i]) {
         this.chars[i] = new CharacterView(m.look);
@@ -136,9 +141,15 @@ export class GameRenderer {
   clearCourse() {
     this.world?.dispose();
     this.world = undefined;
-    if (this.cargo) this.scene.remove(this.cargo.group);
+    if (this.cargo) {
+      this.scene.remove(this.cargo.group);
+      disposeTree(this.cargo.group);
+    }
     this.cargo = undefined;
-    this.chars.forEach((c) => this.scene.remove(c.group));
+    this.chars.forEach((c) => {
+      this.scene.remove(c.group);
+      disposeTree(c.group);
+    });
     this.chars = [];
     this.nameTags.forEach((t) => t.remove());
     this.nameTags = [];

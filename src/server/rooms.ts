@@ -86,6 +86,8 @@ const SNAP_EVERY = 3; // 60 Hz sim → 20 Hz snapshots
 const MAX_CATCHUP = 4;
 const MAX_BUFFERED = 512 * 1024;
 const BOT_HATS = ['chef', 'beanie', 'bucket', 'propeller'];
+/** Upper bound on simulations stepping at once (each is ~0.25 ms per 60 Hz step). */
+const MAX_RUNNING = Number(process.env.MAX_RUNNING_ROOMS ?? 200);
 
 export const bracketFor = (stars: number) => (stars <= 8 ? 0 : stars <= 25 ? 1 : 2);
 
@@ -118,6 +120,7 @@ function quickSpec(bracket: number): CourseSpec {
 export class Game {
   readonly clients = new Set<Client>();
   readonly rooms = new Set<Room>();
+  private reportsByIp = new Map<string, number>();
   private codes = new Map<string, Room>();
   private byId = new Map<string, Client>();
   private timer: NodeJS.Timeout | null = null;
@@ -130,6 +133,12 @@ export class Game {
   ) {}
 
   // ------------------------------------------------------------------ connections
+
+  runningRooms() {
+    let n = 0;
+    for (const r of this.rooms) if (r.state === 'playing') n++;
+    return n;
+  }
 
   /** Wire up a fresh socket; it becomes a Client once it says hello. */
   accept(ws: WebSocket, ip: string) {
@@ -283,6 +292,7 @@ export class Game {
       case 'start':
         if (!room || room.mode !== 'friends' || room.state !== 'lobby') return;
         if (room.hostId !== c.id) return this.error(c, 'Only the host can start.');
+        if (this.runningRooms() >= MAX_RUNNING) return this.error(c, 'The servers are full right now. Try again in a minute!');
         return this.startRun(room);
       case 'again':
         if (!room) return;
@@ -456,7 +466,7 @@ export class Game {
     if (target && seat >= 0) return this.takeSeat(target, c, seat);
     const room = target ?? this.newRoom('quick', bracket);
     this.addHuman(room, c);
-    if (room.humans.length >= MAX_CREW) this.startRun(room);
+    if (room.humans.length >= MAX_CREW && this.runningRooms() < MAX_RUNNING) this.startRun(room);
     else this.broadcastLobby(room);
   }
 
@@ -579,6 +589,10 @@ export class Game {
 
   private report(c: Client, targetId: unknown, reason: unknown) {
     if (typeof targetId !== 'string' || targetId.length > 64 || c.reports >= 20) return;
+    // Reports are capped per address too, so reconnecting can't flood the log.
+    const perIp = (this.reportsByIp.get(c.ip) ?? 0) + 1;
+    if (perIp > 50) return;
+    this.reportsByIp.set(c.ip, perIp);
     const room = c.room;
     const who = room?.humans.find((h) => h.id === targetId) ?? room?.crew.find((m) => m.id === targetId);
     c.reports++;
@@ -617,7 +631,7 @@ export class Game {
         }
       } else if (room.mode === 'quick' && room.state === 'lobby') {
         active++;
-        if (wall >= room.startsAt) this.startRun(room);
+        if (wall >= room.startsAt && this.runningRooms() < MAX_RUNNING) this.startRun(room);
         else if (wall - room.lastCountdown >= 1000) {
           room.lastCountdown = wall;
           this.broadcastLobby(room);

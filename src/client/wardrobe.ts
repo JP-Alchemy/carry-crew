@@ -62,6 +62,7 @@ export class Wardrobe {
   dispose() {
     cancelAnimationFrame(this.raf);
     this.renderer.dispose();
+    this.renderer.forceContextLoss();
     this.canvas.remove();
   }
 }

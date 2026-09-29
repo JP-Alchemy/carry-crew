@@ -146,7 +146,8 @@ export class InputManager {
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
       if (e.repeat) return;
       this.held.add(e.code);
-      for (const k of this.keyboards) k.press(e.code);
+      // Space/Enter on a focused menu button clicks it; it isn't a jump.
+      if ((e.target as HTMLElement)?.tagName !== 'BUTTON') for (const k of this.keyboards) k.press(e.code);
       const digit = /^Digit([1-9])$/.exec(e.code);
       if (digit) {
         const n = Number(digit[1]);

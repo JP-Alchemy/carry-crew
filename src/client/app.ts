@@ -1,5 +1,5 @@
 import { BODY_COLORS, HATS, INVITE_REWARDS, ROPES, SHAPES } from '../shared/cosmetics';
-import { BIOMES, BIOME_ORDER, buildCourse, courseId, courseName, dailySpec, dayKey, weekKey, weeklySpec } from '../shared/courses';
+import { BIOMES, BIOME_ORDER, buildCourse, courseId, courseName, dailySpec, dayKey, weeklySpec } from '../shared/courses';
 import { botName, randomName } from '../shared/names';
 import type { LobbyState, ServerMsg } from '../shared/protocol';
 import { EMOTES, PINGS, PING_TEXT, QUICK_CHAT, type CourseSpec, type CrewMember, type GameEvent, type RunResult, type Snapshot } from '../shared/types';
@@ -63,6 +63,13 @@ export class App {
   private onlineOk: boolean | null = null;
   private localCount = 1;
   private repaired = false;
+  private shown: { r: RunResult; newBest: boolean; doubled: boolean } | null = null;
+  private connecting: Promise<boolean> | null = null;
+
+  /** A real run (not the title-screen demo that plays behind menus and lobbies). */
+  private get inGame() {
+    return !!this.session && !(this.session instanceof LocalSession && this.session.demo);
+  }
 
   constructor(root: HTMLElement) {
     const canvas = root.querySelector<HTMLCanvasElement>('#game')!;
@@ -79,7 +86,9 @@ export class App {
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && this.session && !this.session.online && this.mode !== 'demo') this.pause(true);
+      if (!document.hidden || !this.inGame) return;
+      if (this.session!.online) this.sendNeutralInput();
+      else this.pause(true);
     });
   }
 
@@ -144,12 +153,12 @@ export class App {
     if (this.session && !this.busy) {
       const running = !this.paused || this.session.online;
       if (running) {
-        const inputs = this.mode === 'demo' || this.paused ? [] : this.input.read();
+        const inputs = !this.inGame || this.paused ? [] : this.input.read();
         const snap = this.session.frame(dt, inputs);
         if (snap) {
           this.lastSnap = snap;
           this.renderer.handleEvents(snap.events, snap);
-          if (this.mode !== 'demo') {
+          if (this.inGame) {
             this.playEventSounds(snap.events, snap);
             this.clip.push(snap, dt);
             this.updateHud(snap);
@@ -157,7 +166,9 @@ export class App {
           this.renderer.render(snap, dt, this.t);
         }
       } else if (this.lastSnap) this.renderer.render({ ...this.lastSnap, events: [] }, 0, this.t);
-    }
+      // Gamepad buttons (Start to unpause, pings) are polled even while the game is paused.
+      if (this.paused && !this.session.online) this.input.read();
+    } else if (this.busy && this.session?.online) this.sendNeutralInput();
     requestAnimationFrame((x) => this.loop(x));
   }
 
@@ -238,8 +249,17 @@ export class App {
     }
   }
 
+  /** Online, the server keeps applying your last input: let go of everything while you're in a menu. */
+  private sendNeutralInput() {
+    if (!(this.session instanceof OnlineSession)) return;
+    const last = this.input.read()[0];
+    this.input.held.clear();
+    this.net?.send({ t: 'input', input: { mx: 0, up: false, down: false, grab: false, jumpN: last?.jumpN ?? 0, diveN: last?.diveN ?? 0 } });
+  }
+
   private onAction(a: Action) {
-    if (!this.session || this.mode === 'demo' || this.busy) return;
+    if (!this.inGame || this.busy) return;
+    if (!this.session) return;
     if (a.a === 'pause') {
       this.pause(!this.paused);
       return;
@@ -276,6 +296,7 @@ export class App {
   private endSession() {
     document.body.classList.remove('results');
     this.repaired = false;
+    this.shown = null;
     this.session?.dispose();
     this.session = null;
     this.lastSnap = null;
@@ -328,6 +349,7 @@ export class App {
     if (!this.net) return;
     this.endSession();
     this.clip.clear();
+    this.mode = this.lobby?.mode ?? (this.mode === 'friends' ? 'friends' : 'quick');
     const s = new OnlineSession(this.net, m.spec, m.crew, [m.slot]);
     s.onResult = (r) => this.finish(r);
     s.onCrew = (c) => {
@@ -355,7 +377,7 @@ export class App {
     const p = profile();
     let coins = r.coins;
     const isDaily = this.spec && this.spec.index < 0;
-    const dKey = this.spec?.index === -1 ? `d${dayKey()}` : `w${weekKey()}`;
+    const dKey = this.spec?.index === -1 ? `d${this.spec.seed}` : `w${this.spec?.seed}`;
     if (isDaily && !p.dailyDone[dKey]) coins += 20;
     if (isDaily) p.dailyDone[dKey] = Math.max(p.dailyDone[dKey] ?? 0, r.stars);
     const newBest = recordRun(r.courseId, r.stars, r.time, r.damage, coins);
@@ -756,7 +778,8 @@ export class App {
   // ------------------------------------------------------------------ pause / results
 
   pause(on: boolean) {
-    if (!this.session || this.mode === 'demo' || this.session.result) return;
+    if (!this.session || !this.inGame || this.session.result) return;
+    if (on && this.session.online) this.sendNeutralInput();
     this.paused = on;
     this.input.held.clear();
     if (on) {
@@ -849,11 +872,14 @@ export class App {
     } finally {
       this.busy = false;
     }
-    if (this.session?.result) this.showResults(this.session.result, false);
+    if (this.shown && this.session?.result) this.showResults(this.shown.r, this.shown.newBest);
     else this.showPause();
   }
 
   private showResults(r: RunResult, newBest: boolean) {
+    if (this.shown?.r !== r) this.shown = { r, newBest, doubled: false };
+    newBest = this.shown.newBest;
+    const doubled = this.shown.doubled;
     document.body.classList.add('results');
     const sess = this.session;
     const c = sess?.course;
@@ -870,7 +896,7 @@ export class App {
           <div><b>${intact}%</b><span>${c?.cargo === 'fishtank' ? 'fish happy' : 'intact'}</span></div>
           <div><b>${fmtTime(r.time)}</b><span>par ${fmtTime(r.par)}</span></div>
           <div><b>${r.collectibles}/${r.totalCollectibles}</b><span>⭐ found</span></div>
-          <div><b class="coinval">+${r.coins}</b><span>🪙 coins</span></div>
+          <div><b class="coinval">+${doubled ? r.coins * 2 : r.coins}</b><span>🪙 coins</span></div>
         </div>
         <p class="hint">${r.stars < 3 ? (r.damage > 15 ? 'Tip: fewer bumps = more stars. Carry it level, jump together!' : 'Tip: beat the par time for the third star.') : 'Perfect delivery! 🎉'}</p>
         <div class="row">
@@ -881,7 +907,7 @@ export class App {
         </div>
         <div class="row small">
           <button class="clip" ${clipSupported() && this.clip.length ? '' : 'disabled'}>🎬 Save clip</button>
-          <button class="double">📺 Double coins</button>
+          <button class="double" ${doubled ? 'disabled' : ''}>${doubled ? '✔ Doubled!' : '📺 Double coins'}</button>
           ${isDaily ? '<button class="boardbtn">📊 Leaderboard</button>' : ''}
           <button class="menu">🏠 Menu</button>
         </div>
@@ -900,10 +926,17 @@ export class App {
     s.querySelector('.lobbyback')?.addEventListener('click', () => {
       this.endSession();
       this.startDemo();
+      this.mode = 'friends';
       this.net?.send({ t: 'again' });
       if (this.lobby) this.showLobby(this.lobby);
     });
-    s.querySelector('.requeue')?.addEventListener('click', () => this.afterBreak(() => this.quickCrew()));
+    s.querySelector('.requeue')?.addEventListener('click', () =>
+      this.afterBreak(() => {
+        this.endSession();
+        this.startDemo();
+        void this.quickCrew();
+      }),
+    );
     s.querySelector('.clip')!.addEventListener('click', () => this.saveClip());
     s.querySelector('.boardbtn')?.addEventListener('click', () => this.showBoard());
     s.querySelector('.menu')!.addEventListener('click', () => this.afterBreak(() => {
@@ -912,9 +945,11 @@ export class App {
     }));
     const dbl = s.querySelector<HTMLButtonElement>('.double')!;
     dbl.addEventListener('click', async () => {
+      if (this.shown?.doubled) return;
       dbl.disabled = true;
       const ok = await platform.rewardedBreak();
-      if (ok) {
+      if (ok && this.shown && !this.shown.doubled) {
+        this.shown.doubled = true;
         profile().coins += r.coins;
         saveProfile();
         s.querySelector('.coinval')!.textContent = `+${r.coins * 2}`;
@@ -950,8 +985,13 @@ export class App {
     this.lobby = null;
   }
 
-  private async connect(): Promise<boolean> {
-    if (this.net && !this.net.closed) return true;
+  private connect(): Promise<boolean> {
+    if (this.net && !this.net.closed) return Promise.resolve(true);
+    if (!this.connecting) this.connecting = this.doConnect().finally(() => (this.connecting = null));
+    return this.connecting;
+  }
+
+  private async doConnect(): Promise<boolean> {
     const net = new Net();
     const ok = await net.connect();
     if (!ok) {
@@ -1007,7 +1047,10 @@ export class App {
       this.showMenu();
     });
     const ok = await this.connect();
-    if (cancelled) return;
+    if (cancelled) {
+      this.leaveNet();
+      return;
+    }
     if (!ok) {
       // No server (offline build or blocked network): straight into a crew of bots.
       this.toast('Playing with bot buddies (no server found)');
