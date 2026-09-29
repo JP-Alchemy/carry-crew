@@ -31,7 +31,8 @@ interface ColliderInfo {
 }
 
 export interface Grab {
-  joint: RAPIER.ImpulseJoint;
+  joint: RAPIER.ImpulseJoint | null; // null for cargo: it's carried by the carry controller
+  side: number; // cargo only: which side of the holder the cargo is on
   kind: 'cargo' | 'rope' | 'ledge' | 'prop';
   body: RAPIER.RigidBody;
   span?: number;
@@ -68,6 +69,7 @@ export interface PlayerState {
   inWater: boolean;
   onCargo: boolean;
   lastUp: boolean;
+  restT: number;
 }
 
 interface Span {
@@ -109,6 +111,8 @@ export interface SimOptions {
 }
 
 const FAR = 1e5;
+/** How far above a holder's centre the cargo's centre is carried. */
+const CARRY_LIFT = 0.45;
 const DEBUG_DAMAGE = typeof process !== 'undefined' && !!process.env?.DEBUG_DAMAGE;
 
 export class Sim {
@@ -199,7 +203,7 @@ export class Sim {
       this.info.set(col.handle, { kind: 'prop', i });
       if (def.kind === 'seesaw') {
         const j = this.world.createImpulseJoint(RAPIER.JointData.revolute({ x: def.x, y: def.y }, { x: 0, y: 0 }), this.terrain, body, true);
-        (j as RAPIER.RevoluteImpulseJoint).setLimits(-0.36, 0.36);
+        (j as RAPIER.RevoluteImpulseJoint).setLimits(-0.2, 0.2);
       }
       this.props.push({ def, body, lastPhase: 0 });
     });
@@ -213,7 +217,7 @@ export class Sim {
         RAPIER.ColliderDesc.ball(C.PLAYER_R)
           .setDensity(C.PLAYER_DENSITY)
           .setFriction(0.4)
-          .setCollisionGroups(C.groups(C.G_PLAYER, C.G_TERRAIN | C.G_PLAYER | C.G_CARGO | C.G_PROP)),
+          .setCollisionGroups(C.PLAYER_GROUPS),
         body,
       );
       this.info.set(collider.handle, { kind: 'player', i });
@@ -244,6 +248,7 @@ export class Sim {
         inWater: false,
         onCargo: false,
         lastUp: false,
+        restT: 0,
       });
     });
 
@@ -257,7 +262,7 @@ export class Sim {
   private buildCargo() {
     const kind = this.course.cargo;
     const mm = this.course.twist.cargoMass;
-    const groups = C.groups(C.G_CARGO, C.G_TERRAIN | C.G_PLAYER | C.G_PROP | C.G_CARGO);
+    const groups = C.groups(C.G_CARGO, C.G_TERRAIN | C.G_PROP | C.G_CARGO);
     const add = (w: number, h: number, mass: number, restY: number, com?: { x: number; y: number }) => {
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic().setAngularDamping(kind === 'plates' ? 0.8 : 1.6).setLinearDamping(0.1).setCcdEnabled(true).setCanSleep(false),
@@ -489,7 +494,9 @@ export class Sim {
     p.flopT = Math.max(0, p.flopT - dt);
     p.hurtCd = Math.max(0, p.hurtCd - dt);
     p.jumpBuffer = Math.max(0, p.jumpBuffer - dt);
-    p.coyote = p.grounded ? C.COYOTE_TIME : Math.max(0, p.coyote - dt);
+    // Wedged in a corner (resting but no floor under the rays) still counts as footing.
+    p.restT = Math.abs(v.y) < 0.08 && !(p.grab && p.grab.kind !== 'cargo') ? p.restT + dt : 0;
+    p.coyote = p.grounded || p.restT > 0.2 ? C.COYOTE_TIME : Math.max(0, p.coyote - dt);
 
     if (inp.jumpN !== p.lastJumpN) {
       p.lastJumpN = inp.jumpN;
@@ -542,7 +549,7 @@ export class Sim {
         b.setLinvel({ x: v.x, y: C.JUMP_V * Math.sqrt(this.course.twist.gravity) }, true);
         if (p.grab?.kind === 'cargo') {
           const share = this.cargoMass / Math.max(1, this.holders());
-          this.cargo[0].body.applyImpulse({ x: 0, y: share * C.JUMP_V * 0.55 }, true);
+          this.cargo[0].body.applyImpulse({ x: 0, y: share * C.JUMP_V * 0.3 }, true);
         }
         p.coyote = 0;
         p.jumpBuffer = 0;
@@ -640,17 +647,21 @@ export class Sim {
       this.world.intersectionsWithShape(probe, 0, new RAPIER.Ball(r), (col) => {
         const info = this.info.get(col.handle);
         if (!info || info.kind === 'player') return true;
+        if (p.input.ledge && (info.kind === 'rope' || info.kind === 'cargo')) return true;
         if (info.kind === 'cargo' && p.onCargo) return true;
         if (info.kind === 'terrain' && this.course.solids[info.solid!]?.tag === 'invisible') return true;
         if (info.kind === 'rope') {
           const n = this.spans[info.i].segs.length;
-          const near = (info.i === i && info.j! < 3) || (info.i === i - 1 && info.j! >= n - 3);
+          const own = info.i === i || info.i === i - 1;
+          // Your own rope is only worth grabbing to climb it: when dangling, or when pushing up.
+          if (own && p.grounded && !p.input.up) return true;
+          const near = (info.i === i && info.j! < 1) || (info.i === i - 1 && info.j! >= n - 1);
           if (near) return true;
         }
         const proj = col.projectPoint(probe, true);
         const pt = proj ? { x: proj.point.x, y: proj.point.y } : { x: probe.x, y: probe.y };
         const dist = Math.hypot(pt.x - probe.x, pt.y - probe.y);
-        const pri = panic ? 0 : info.kind === 'cargo' ? 0 : info.kind === 'prop' || info.kind === 'mover' ? 0.4 : info.kind === 'rope' ? 0.5 : 0.8;
+        const pri = panic ? 0 : info.kind === 'cargo' ? -1 : info.kind === 'prop' || info.kind === 'mover' ? 0.4 : info.kind === 'rope' ? 0.5 : 0.8;
         const score = pri + dist + pi * 0.3;
         if (!best || score < best.score) best = { col, info, pt, score };
         return true;
@@ -670,11 +681,16 @@ export class Sim {
     const c = Math.cos(-ba);
     const s = Math.sin(-ba);
     const local = { x: dx * c - dy * s, y: dx * s + dy * c };
-    if (kind === 'cargo' && info.i === 0 && !panic) {
-      // Carry from underneath the side so the cargo lifts off the ground to hand height.
-      const part = this.cargo[0];
-      local.y = Math.min(local.y, -part.h / 2 + Math.min(0.18, part.h * 0.2));
-      local.x = Math.sign(local.x || 1) * (part.w / 2 - 0.02);
+    if (kind === 'cargo') {
+      // Cargo isn't pinned: the carry controller lifts it to the holders' hands (see cargoForces).
+      const main = this.cargo[0];
+      const mt = main.body.translation();
+      const side = Math.sign(mt.x - center.x) || p.facing;
+      const g: Grab = { joint: null, kind: 'cargo', body: main.body, side, local: { x: -side * (main.w / 2), y: 0 }, handOff: { x: side * C.PLAYER_R, y: CARRY_LIFT }, part: 0 };
+      p.grab = g;
+      p.facing = side;
+      this.events.push({ e: 'grab', p: i, what: 'cargo', x: pt.x, y: pt.y });
+      return true;
     }
     if (panic) {
       // Panic grab yanks you to the grip point.
@@ -683,7 +699,7 @@ export class Sim {
       p.body.setTranslation({ x: pt.x - ((pt.x - center.x) / d) * off, y: pt.y - ((pt.y - center.y) / d) * off }, true);
       p.body.setLinvel({ x: 0, y: 0 }, true);
     }
-    return !!this.attach(i, kind, body, local, { part: info.kind === 'cargo' ? info.i : undefined }, kind === 'cargo' ? undefined : pt);
+    return !!this.attach(i, kind, body, local, {}, pt);
   }
 
   private attach(
@@ -703,17 +719,13 @@ export class Sim {
         const a = body.rotation();
         return { x: t.x + local.x * Math.cos(a) - local.y * Math.sin(a), y: t.y + local.x * Math.sin(a) + local.y * Math.cos(a) };
       })();
-    let hx = wp.x - c.x;
-    let hy = wp.y - c.y;
-    const d = Math.hypot(hx, hy);
-    const maxOff = C.PLAYER_R + 0.06;
-    if (d > maxOff) {
-      hx = (hx / d) * maxOff;
-      hy = (hy / d) * maxOff;
-    }
+    // Zero-error joint: anchor exactly where the hand touches, so grabbing never yanks.
+    const hx = wp.x - c.x;
+    const hy = wp.y - c.y;
+    if (Math.hypot(hx, hy) > C.PLAYER_R + 0.45) return null;
     const joint = this.world.createImpulseJoint(RAPIER.JointData.revolute({ x: hx, y: hy }, local), p.body, body, true);
     joint.setContactsEnabled(false);
-    p.grab = { joint, kind, body, local, handOff: { x: hx, y: hy }, ...extra };
+    p.grab = { joint, side: 0, kind, body, local, handOff: { x: hx, y: hy }, ...extra };
     if (Math.abs(hx) > 0.05) p.facing = Math.sign(hx);
     this.events.push({ e: 'grab', p: i, what: kind, x: wp.x, y: wp.y });
     return p.grab;
@@ -721,7 +733,7 @@ export class Sim {
 
   release(p: PlayerState, emit: boolean) {
     if (!p.grab) return;
-    if (p.grab.joint.isValid()) this.world.removeImpulseJoint(p.grab.joint, true);
+    if (p.grab.joint?.isValid()) this.world.removeImpulseJoint(p.grab.joint, true);
     p.grab = null;
     if (emit) this.events.push({ e: 'release', p: this.players.indexOf(p) });
   }
@@ -856,7 +868,8 @@ export class Sim {
       }
       if (wet && !p.inWater) this.events.push({ e: 'ouch', p: i, kind: 'water' });
       p.inWater = wet;
-      p.killT = inKill ? p.killT + dt : 0;
+      // Bobbing on the rope at the edge of a kill zone still counts.
+      p.killT = inKill ? p.killT + dt : Math.max(0, p.killT - dt * 0.5);
       if (p.killT > C.KILL_GRACE || t.y < this.course.killY) {
         this.lastFell = i;
         this.events.push({ e: 'fell', p: i });
@@ -909,24 +922,79 @@ export class Sim {
     }
   }
 
+  /**
+   * The carry controller: the cargo is pulled toward the holders' hands with a capped force, so
+   * obstacles still block and bump it. Holders feel the drag, and if it snags too far behind, it
+   * slips out of their hands. Two holders (or a solo crew) can lift it; one holder mostly drags it.
+   */
+  private carry(holders: PlayerState[], dt: number) {
+    const main = this.cargo[0];
+    const b = main.body;
+    const m = b.mass();
+    const g = -C.GRAVITY * this.course.twist.gravity;
+    const n = holders.length;
+    const strong = n >= Math.min(2, this.players.length);
+    let tx = 0;
+    let ty = 0;
+    let hvx = 0;
+    let hvy = 0;
+    const cx = b.translation().x;
+    for (const h of holders) {
+      const t = h.body.translation();
+      const v = h.body.linvel();
+      const g = h.grab!;
+      if ((cx - t.x) * g.side < -0.3) {
+        g.side = -g.side;
+        g.local = { x: -g.local.x, y: g.local.y };
+      }
+      tx += t.x + g.side * (C.PLAYER_R + main.w / 2 + 0.03);
+      ty += t.y + CARRY_LIFT;
+      hvx += v.x;
+      hvy += v.y;
+    }
+    tx /= n;
+    ty /= n;
+    hvx /= n;
+    hvy /= n;
+    const pos = b.translation();
+    const v = b.linvel();
+    const w0 = strong ? 11 : 6;
+    let fx = m * (w0 * w0 * (tx - pos.x) - 1.6 * w0 * (v.x - hvx));
+    let fy = m * (w0 * w0 * (ty - pos.y) - 1.6 * w0 * (v.y - hvy));
+    const cap = m * (strong ? 32 : 12);
+    const f = Math.hypot(fx, fy);
+    if (f > cap) {
+      fx *= cap / f;
+      fy *= cap / f;
+    }
+    b.applyImpulse({ x: fx * dt, y: fy * dt }, true);
+    for (const part of this.cargo) if (part.alive) part.body.applyImpulse({ x: 0, y: part.body.mass() * g * (strong ? 1 : 0.55) * dt }, true);
+    // Holders feel it: the drag of a snagged cargo, and its weight.
+    for (const h of holders) {
+      const weight = (this.cargoMass * g * (strong ? 0.35 : 0.6)) / n;
+      h.body.applyImpulse({ x: (-fx * 0.45 * dt) / n, y: (-Math.max(0, fy) * 0.25 * dt) / n - (h.grounded ? weight * dt : 0) }, true);
+    }
+    // Keep it level when carried properly; a lone holder lets it tilt.
+    const k = strong ? 14 : 3;
+    b.applyTorqueImpulse((-b.rotation() * k - b.angvel() * (strong ? 2.2 : 0.6)) * m * dt, true);
+    // Snagged too far from someone's hands? It slips.
+    for (const h of holders) {
+      const t = h.body.translation();
+      const a = b.rotation();
+      const ax = pos.x + h.grab!.local.x * Math.cos(a) - h.grab!.local.y * Math.sin(a);
+      const ay = pos.y + h.grab!.local.x * Math.sin(a) + h.grab!.local.y * Math.cos(a);
+      if (Math.hypot(ax - (t.x + h.grab!.side * C.PLAYER_R), ay - (t.y + CARRY_LIFT)) > 1.25) {
+        this.release(h, true);
+        h.regrabCd = 0.5;
+        this.events.push({ e: 'slip', p: this.players.indexOf(h) });
+      }
+    }
+  }
+
   private cargoForces(dt: number) {
     const main = this.cargo[0];
     const holders = this.players.filter((p) => p.grab && p.grab.kind === 'cargo');
-    if (holders.length) {
-      // Carry assist: holders take part of the weight so carrying together feels possible (and alone feels heavy).
-      const handY = holders.reduce((s, p) => s + p.body.translation().y, 0) / holders.length;
-      const ct = main.body.translation();
-      const share = Math.min(0.85, 0.25 + 0.3 * holders.length);
-      const g = -C.GRAVITY * this.course.twist.gravity;
-      if (ct.y < handY + 0.9) {
-        for (const part of this.cargo) if (part.alive) part.body.applyImpulse({ x: 0, y: part.body.mass() * g * share * dt }, true);
-      }
-      // Holders feel the cargo's weight too.
-      const perHolder = (this.cargoMass * g * (1 - share)) / holders.length;
-      for (const p of holders) if (p.grounded) p.body.applyImpulse({ x: 0, y: -perHolder * dt * 0.5 }, true);
-      // Keep the cargo roughly level when two or more carry it.
-      if (holders.length >= 2) main.body.applyTorqueImpulse(-main.body.rotation() * 2.2 * main.body.mass() * dt - main.body.angvel() * 0.2 * main.body.mass() * dt, true);
-    }
+    if (holders.length) this.carry(holders, dt);
     if (this.course.cargo === 'fishtank') {
       const v = main.body.linvel();
       const ax = (v.x - main.prevV.x) / dt;
@@ -1007,14 +1075,14 @@ export class Sim {
       const t = p.body.translation();
       const v = p.body.linvel();
       let hit: RAPIER.RayColliderHit | null = null;
-      for (const ox of [0, -0.55, 0.55]) {
+      for (const ox of [0, -0.55, 0.55, -0.86, 0.86]) {
         const dy = Math.sqrt(1 - ox * ox) * C.PLAYER_R;
         const h = this.world.castRay(
           new RAPIER.Ray({ x: t.x + ox * C.PLAYER_R, y: t.y }, { x: 0, y: -1 }),
           dy + 0.08,
           true,
           undefined,
-          C.groups(C.G_PLAYER, C.G_TERRAIN | C.G_PLAYER | C.G_CARGO | C.G_PROP),
+          C.groups(C.G_PLAYER, C.G_TERRAIN | C.G_PROP),
           p.collider,
           undefined,
           groundFilter,
@@ -1099,7 +1167,7 @@ export class Sim {
   // ------------------------------------------------------------------ snapshot
 
   snapshot(): Snapshot {
-    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const r2 = (n: number) => Math.round(n * 100) / 100 || 0;
     const players: PlayerSnap[] = this.players.map((p) => {
       const t = p.body.translation();
       const v = p.body.linvel();
@@ -1113,6 +1181,7 @@ export class Sim {
         st: r2(p.stamina / C.STAMINA_MAX),
         s: p.diveT > 0 ? 1 : p.flopT > 0 ? 2 : p.grab && !p.grounded ? 3 : 0,
         pu: p.panicUsed ? 1 : 0,
+        c: p.grab?.kind === 'cargo' ? 1 : 0,
       };
       if (p.grab) {
         const bt = p.grab.body.translation();

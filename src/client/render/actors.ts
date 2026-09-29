@@ -101,6 +101,7 @@ export class CharacterView {
   private blink = 0;
   private emoteT = 0;
   private emote = '';
+  private z = 0;
   look: Look;
   mood: 'normal' | 'happy' | 'scared' = 'normal';
 
@@ -121,8 +122,8 @@ export class CharacterView {
     this.eyes = new THREE.Group();
     this.pupils = [];
     for (const x of [-0.12, 0.12]) {
-      const white = mesh(SPHERE(), toon(0xffffff), x, 0.08, R * 0.82, 0.1, 0.12, 0.06);
-      const pupil = mesh(SPHERE(), toon(0x1b1b1b), x, 0.07, R * 0.86, 0.05, 0.065, 0.04);
+      const white = mesh(SPHERE(), toon(0xffffff), x, 0.08, R * 0.8, 0.11, 0.13, 0.07);
+      const pupil = mesh(SPHERE(), toon(0x1b1b1b), x, 0.07, R * 0.88, 0.065, 0.08, 0.04);
       this.eyes.add(white, pupil);
       this.pupils.push(pupil);
     }
@@ -164,8 +165,14 @@ export class CharacterView {
     this.emoteT = 1.2;
   }
 
-  update(s: PlayerSnap, dt: number, t: number) {
-    this.group.position.set(s.x, s.y, 0);
+  /** Small depth offset per crew member so overlapping players don't z-fight. */
+  lane = 0;
+
+  update(s: PlayerSnap, dt: number, t: number, cargoX?: number) {
+    // Players pass through the cargo and each other: step toward the camera when overlapping.
+    const front = s.c || (cargoX !== undefined && Math.abs(s.x - cargoX) < 1.1);
+    this.z += ((front ? 0.6 : this.lane) - this.z) * Math.min(1, dt * 10);
+    this.group.position.set(s.x, s.y, this.z);
     const speed = Math.abs(s.vx);
     this.phase += dt * (s.g ? speed * 3.2 : 1.5);
     // squash & stretch
@@ -196,7 +203,7 @@ export class CharacterView {
     if (this.blink < -3 - Math.random() * 3) this.blink = 0.12;
     const eyeScale = this.blink > 0 ? 0.15 : s.s === 2 || s.vy < -8 ? 1.5 : 1;
     this.pupils.forEach((p, k) => {
-      p.scale.y = 0.065 * eyeScale;
+      p.scale.y = 0.08 * eyeScale;
       p.position.x = (k ? 0.12 : -0.12) + Math.max(-0.03, Math.min(0.03, s.vx * 0.01));
       p.position.y = 0.07 + Math.max(-0.03, Math.min(0.03, s.vy * 0.005));
     });

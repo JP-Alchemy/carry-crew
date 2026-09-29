@@ -147,9 +147,9 @@ const kStart: Piece = (b) => {
 
 const kJars: Piece = (b, d) => {
   b.ground(0, 16);
-  b.block(4, 0, 1.1, 0.6 + 0.2 * d, 'jar', { tag: 'honey' });
+  b.block(4, 0, 1.1, 0.6 + 0.12 * d, 'jar', { tag: 'honey' });
   b.block(8.5, 0, 1.9, 0.45, 'box', { tag: 'cereal' });
-  b.block(12.5, 0, 1.0, 0.75 + 0.25 * d, 'jar', { tag: 'jam' });
+  b.block(12.5, 0, 1.0, 0.75 + 0.12 * d, 'jar', { tag: 'jam' });
   b.coin(8.5, 2.5);
   b.hint(2.8, 'jump');
   b.hint(7.2, 'jump');
@@ -162,9 +162,10 @@ const kJars: Piece = (b, d) => {
 const kStove: Piece = (b, d) => {
   b.ground(0, 3);
   b.ground(3, 12, 0, 'stove');
+  // Burners flicker in a "green wave": walk at carrying pace and you catch each one off.
   const burners = d >= 1 ? [4.2, 7.6, 11] : [5, 10];
   burners.forEach((x, i) => {
-    b.zone('heat', x, 0, 2, 0.55, { period: 4.4, duty: 0.5, phase: i * 1.4, tag: 'burner' });
+    b.zone('heat', x, 0, 2, 0.55, { period: 4.4, duty: d >= 2 ? 0.55 : 0.5, phase: -((x - burners[0]) / 3.3) - i * 0.2, tag: 'burner' });
     b.hint(x - 0.9, 'wait');
   });
   b.coin(burners[1] + 1, 2.3);
@@ -182,10 +183,10 @@ const kSink: Piece = (b, d) => {
   // A dish rack bridges the sink; harder versions have a gap to hop.
   if (d === 0) b.box(3.8, -0.25, 6.4, 0.22, 'rack');
   else {
-    const gap = d >= 2 ? 0.8 : 0.6;
+    const gap = d >= 2 ? 1.0 : 0.8;
     b.box(3.8, -0.25, 3.2 - gap / 2, 0.22, 'rack');
     b.box(7 + gap / 2, -0.25, 3.2 - gap / 2, 0.22, 'rack');
-    b.hint(6.3 - gap / 2, 'jump');
+    b.hint(6.7 - gap / 2, 'gap');
   }
   b.deco('rack', 7, -2.7, 0, 1);
   b.deco('tap', 7.4, 0, -0.7, 1);
@@ -213,14 +214,14 @@ const kBooks: Piece = (b, d) => {
 
 const kCat: Piece = (b, d) => {
   b.ground(0, 17);
-  b.block(6, 0, 1.5, 0.8, 'toaster');
+  b.block(6, 0, 1.5, 0.7, 'toaster');
   b.deco('cat', 15.6, 0, -1.6, 1);
   b.mover({
     kind: 'paw',
     w: 1.7,
     h: 0.7,
     mat: 'fur',
-    path: { type: 'line', ax: 14.2, ay: 2.4, bx: 8.1, by: 0.4, period: d >= 2 ? 3.6 : 4.6, profile: 'swipe' },
+    path: { type: 'line', ax: 13.8, ay: 2.7, bx: 8.8, by: 0.42, period: d >= 2 ? 5 : d === 1 ? 5.4 : 6, profile: 'swipe' },
     knock: { x: -6, y: 5, damage: 14 },
   });
   b.hint(4.9, 'wait');
@@ -235,8 +236,10 @@ const kSpoon: Piece = (b, d) => {
   if (d === 0) {
     b.plank(3.6, 0, 10.4, 0, 0.26, 'spoon');
   } else {
-    b.prop({ kind: 'seesaw', x: 7, y: -0.14, w: 5.8, h: 0.26, mass: 1.6, mat: 'board' });
+    b.prop({ kind: 'seesaw', x: 7, y: 0.02, w: 5.8, h: 0.26, mass: 1.6, mat: 'board' });
     b.deco('rollingpin', 7, -0.9, 0, 1);
+    b.hint(3.4, 'jump');
+    b.hint(9.6, 'jump');
   }
   b.coin(7, 1.6);
   b.deco('cabinet', 7, 6.5, -3.4, 1);
@@ -263,7 +266,7 @@ const kCereal: Piece = (b, d) => {
 
 const kGoal: Piece = (b) => {
   b.ground(0, 4);
-  b.box(4.25, 0, 11.75, 0.45, 'table');
+  b.box(4, 0, 12, 0.45, 'table');
   b.deco('tableleg', 5, -0.45, 0, 1);
   b.deco('tableleg', 15.3, -0.45, 0, 1);
   b.goalAt(9, 0, 4, 2.2);
@@ -303,11 +306,11 @@ const bBooks: Piece = (b, d) => {
 const bBlocks: Piece = (b, d) => {
   b.ground(0, 14);
   const s = 0.62;
-  const cols = 3;
-  const rows = d >= 1 ? 4 : 3;
+  const cols = d >= 1 ? 3 : 2;
+  const rows = d >= 2 ? 3 : 2;
   for (let c = 0; c < cols; c++)
     for (let r = 0; r < rows; r++)
-      b.prop({ kind: 'block', x: 6.4 + c * (s + 0.02), y: s / 2 + r * s + 0.01, w: s, h: s, mass: 0.3, mat: 'toyblock' });
+      b.prop({ kind: 'block', x: 6.4 + c * (s + 0.02), y: s / 2 + r * s + 0.01, w: s, h: s, mass: 0.15, mat: 'toyblock' });
   b.block(11.2, 0, 1.2, 0.6, 'toyblock');
   b.hint(5.4, 'jump');
   b.coin(7, 3.5);
@@ -317,19 +320,28 @@ const bBlocks: Piece = (b, d) => {
 
 const bCar: Piece = (b, d) => {
   b.ground(0, 16);
+  // A book bridge over the toy-car lane. Fall through the gap and the car bowls you over.
+  b.block(2.4, 0, 1.2, 0.5, 'toyblock');
+  const gap = d >= 2 ? 0.9 : d === 1 ? 0.8 : 0.7;
+  // Open at both ends, so anyone who falls in can walk out (if the car lets them).
+  b.box(3, 1.0, 4.6 - gap / 2, 0.18, 'shelf');
+  b.box(7.6 + gap / 2, 1.0, 5.6 - gap / 2, 0.18, 'shelf');
+  b.deco('shelfleg', 3.2, 0, 0.55, 1);
+  b.deco('shelfleg', 13, 0, 0.55, 1);
   b.mover({
     kind: 'car',
-    w: 1.7,
-    h: 0.75,
+    w: 1.6,
+    h: 0.7,
     mat: 'toycar',
-    path: { type: 'line', ax: 3.5, ay: 0.38, bx: 13.5, by: 0.38, period: d >= 1 ? 4.4 : 5.6, profile: 'pingpong' },
+    path: { type: 'line', ax: 5.4, ay: 0.36, bx: 10.6, by: 0.36, period: d >= 1 ? 3.6 : 4.6, profile: 'pingpong' },
     knock: { x: 5, y: 4.5, damage: 12 },
+    botIgnore: true,
   });
-  b.block(2, 0, 1.2, 0.45, 'toyblock');
-  b.block(14.6, 0, 1.2, 0.45, 'toyblock');
-  b.hint(2.8, 'wait');
-  b.coin(8.5, 2.2);
-  b.deco('track', 8.5, 0, -0.4, 1);
+  b.hint(1.5, 'jump');
+  b.hint(2.7, 'jump');
+  b.hint(7.5 - gap / 2, 'gap');
+  b.coin(7.6, 0.6);
+  b.deco('track', 8, 0, -0.4, 1);
   b.deco('poster', 8, 4.6, -3.2, 1, { text: 'VROOM' });
   return { w: 16, par: 26 };
 };
@@ -337,7 +349,7 @@ const bCar: Piece = (b, d) => {
 const bBed: Piece = (b, d) => {
   b.ground(0, 3.5);
   b.baseMat = 'bed';
-  b.ground(4.3, 11.7, -1.2, 'bed', { bounce: 0.55, friction: 0.9 });
+  b.ground(3.5, 12.5, -1.2, 'bed', { bounce: 0.55, friction: 0.9 });
   b.prop({ kind: 'pillow', x: 8, y: -0.75, w: 2.4, h: 0.8, mass: 0.5, mat: 'pillow' });
   if (d >= 1) b.prop({ kind: 'pillow', x: 12.4, y: -0.75, w: 2.2, h: 0.8, mass: 0.5, mat: 'pillow' });
   b.deco('headboard', 5.2, -1.2, -0.6, 1);
@@ -349,9 +361,9 @@ const bBed: Piece = (b, d) => {
 
 const bDog: Piece = (b, d) => {
   b.ground(0, 16, 0, 'bed', { bounce: 0.55, friction: 0.9 });
-  b.mover({ kind: 'dog', w: 4.4, h: 1.2, mat: 'dogfur', path: { type: 'breathe', x: 8, y: 0.6, amp: 0.28, period: 3.2 } });
-  b.deco('doghead', 10.9, 0, -0.5, 1);
-  b.zone('wind', 3, 0, 9, 3.2, { fx: -26, fy: 4, period: 5, duty: d >= 1 ? 0.45 : 0.35, phase: 1, tag: 'snore' });
+  b.mover({ kind: 'dog', w: 4.6, h: 0.7, mat: 'dogfur', path: { type: 'breathe', x: 8, y: 0.35, amp: 0.22, period: 3.2 } });
+  b.deco('doghead', 11, 0, -0.5, 0.85);
+  b.zone('wind', 5.5, 0, 6.5, 3.2, { fx: d >= 1 ? -20 : -15, fy: 3, period: 5, duty: d >= 1 ? 0.4 : 0.3, phase: 1, tag: 'snore' });
   b.hint(5.2, 'wait');
   b.hint(5.3, 'jump');
   b.coin(8, 2.8);
@@ -361,9 +373,9 @@ const bDog: Piece = (b, d) => {
 const bFan: Piece = (b, d) => {
   b.ground(0, 16, 0, b.baseMat, b.baseMat === 'bed' ? { bounce: 0.55, friction: 0.9 } : {});
   b.deco('fan', 15.5, 0, -0.8, 1.3);
-  b.zone('wind', 2, 0, 12, 4, { fx: d >= 2 ? -24 : -17, period: 7, duty: 0.55, tag: 'fan' });
-  b.block(6, 0, 1, 0.9, 'toyblock');
-  b.block(10, 0, 1, 0.9, 'toyblock');
+  b.zone('wind', 2, 0, 12, 4, { fx: d >= 2 ? -20 : d === 1 ? -15 : -11, period: 7, duty: 0.5, tag: 'fan' });
+  b.block(6, 0, 1, 0.45, 'toyblock');
+  b.block(10, 0, 1, 0.45, 'toyblock');
   b.hint(5, 'jump');
   b.hint(9, 'jump');
   b.coin(8, 2);
@@ -373,9 +385,9 @@ const bFan: Piece = (b, d) => {
 const bShelf: Piece = (b, d) => {
   b.ground(0, 3.5, 0, b.baseMat);
   b.baseMat = 'shelf';
-  const step = d >= 1 ? 0.95 : 0.8;
-  b.box(3.5, step, 3, 0.25, 'shelf');
-  b.box(6.5, step * 2, 3, 0.25, 'shelf');
+  const step = d >= 2 ? 0.9 : d === 1 ? 0.85 : 0.8;
+  b.ground(3.5, 3, step, 'shelf');
+  b.ground(6.5, 3, step * 2, 'shelf');
   b.ground(9.5, 4.5, step * 3, 'shelf');
   b.box(3.5, step * 2 + 1.6, 2.5, 0.25, 'shelf');
   b.coin(4.7, step * 2 + 2.3);
@@ -384,7 +396,6 @@ const bShelf: Piece = (b, d) => {
   b.hint(3.2, 'jump');
   b.hint(6.2, 'jump');
   b.hint(9.2, 'jump');
-  b.zone('kill', 3.5, -1.6, 6, 0.4);
   return { w: 14, exitY: step * 3, par: 30 };
 };
 
@@ -414,11 +425,10 @@ const pSand: Piece = (b) => {
   b.ground(0, 3);
   b.ground(3, 10, -0.3, 'sand');
   b.zone('sand', 3, -0.3, 10, 1.2);
-  b.block(6, -0.3, 0.9, 0.9, 'bucket');
-  b.block(10, -0.3, 1.4, 0.5, 'toyblock');
+  b.block(6, -0.3, 0.9, 0.75, 'bucket');
   b.ground(13, 3);
-  b.hint(5.2, 'jump');
-  b.hint(9, 'jump');
+  b.hint(5.1, 'jump');
+  b.hint(12.6, 'jump');
   b.coin(6, 2.4);
   b.deco('spade', 11.5, -0.3, -0.8, 1);
   return { w: 16, par: 28 };
@@ -426,15 +436,17 @@ const pSand: Piece = (b) => {
 
 const pSlide: Piece = (b, d) => {
   b.ground(0, 16);
-  const h = d >= 1 ? 3.6 : 3;
+  // Climb the steps, then ride the slide down (it's slippery: hold on to that vase!).
+  const rise = d >= 1 ? 0.62 : 0.55;
   const steps = 4;
-  for (let i = 1; i <= steps; i++) b.box(1.8 + i * 0.95, (h * i) / steps, 0.95, 0.22, 'metal', { tag: 'rung' });
-  b.box(1.8 + (steps + 1) * 0.95, h, 1.6, 0.3, 'wood');
-  const sx = 1.8 + (steps + 1) * 0.95 + 1.6;
-  b.plank(sx, h, 15.2, 0.25, 0.3, 'slide', { friction: 0.05 });
-  for (let i = 1; i <= steps; i++) b.hint(1.8 + i * 0.95 - 0.5, 'jump');
-  b.coin(sx - 0.8, h + 1.4);
-  b.deco('slideframe', sx - 0.8, 0, -0.6, 1, { s: h });
+  for (let i = 1; i <= steps; i++) b.box(1.2 + i * 1.1, rise * i, 1.1, rise * i, 'wood', { tag: 'step' });
+  const top = rise * steps;
+  const sx = 1.2 + (steps + 1) * 1.1;
+  b.box(sx, top, 1.4, top, 'wood');
+  b.plank(sx + 1.4, top, 15.4, 0.1, 0.3, 'slide', { friction: 0.08 });
+  for (let i = 1; i <= steps; i++) b.hint(1.2 + i * 1.1 - 0.35, 'jump');
+  b.coin(sx + 0.7, top + 1.5);
+  b.deco('slideframe', sx + 0.7, 0, -0.9, 1);
   return { w: 16, par: 30 };
 };
 
@@ -443,23 +455,25 @@ const pSwings: Piece = (b, d) => {
   b.ground(15, 3);
   b.ground(3, 12, -2.2, 'mud');
   b.zone('kill', 3, -2.2, 12, 0.7, { tag: 'puddle' });
+  // A rickety bridge over the puddle, right under the swings. Time your crossing!
+  const gap = d >= 1 ? 0.8 : 0.55;
+  b.box(3, -0.25, 3.8 - gap / 2, 0.2, 'wood');
+  b.box(6.8 + gap / 2, -0.25, 4 - gap, 0.2, 'wood');
+  b.box(10.8 + gap / 2, -0.25, 4.2 - gap / 2, 0.2, 'wood');
   const xs = [5.2, 9, 12.8];
   xs.forEach((x, i) =>
     b.mover({
       kind: 'swing',
-      w: 1.8,
+      w: 1.6,
       h: 0.22,
       mat: 'rubber',
-      path: { type: 'pendulum', px: x, py: 5.6, len: 5.5, amp: d >= 1 ? 0.28 : 0.18, period: 3.4, phase: i * 0.7 },
+      path: { type: 'pendulum', px: x, py: 6.6, len: 5.0, amp: d >= 1 ? 0.3 : 0.22, period: 3.6, phase: i * 0.33 },
     }),
   );
-  if (d === 0) b.box(6.8, -0.2, 0.7, 0.3, 'tyre');
   b.deco('swingframe', 9, 0, -0.4, 1);
-  b.hint(2.6, 'jump');
-  b.hint(6.2, 'jump');
-  b.hint(10, 'jump');
-  b.hint(14, 'jump');
-  b.coin(9, 1.6);
+  b.hint(6.8 - gap / 2 - 0.1, 'gap');
+  b.hint(10.8 - gap / 2 - 0.1, 'gap');
+  b.coin(9, 2.2);
   return { w: 18, par: 34 };
 };
 
@@ -476,29 +490,37 @@ const pFootball: Piece = (b, d) => {
 
 const pFrame: Piece = (b, d) => {
   b.ground(0, 3);
-  const hi = d >= 1 ? 2.6 : 2.2;
-  b.box(3, 1.1, 3.4, 0.3, 'wood');
-  b.box(7, hi, 3.2, 0.3, 'wood');
-  b.box(10.8, 1.1, 3.2, 0.3, 'wood');
-  b.ground(3, 11, -1.6, 'mud');
-  b.zone('kill', 3, -1.6, 11, 0.6, { tag: 'puddle' });
+  // Climbing frame over a mud puddle: up the platforms and down the other side.
+  const hi = d >= 2 ? 1.8 : 1.5;
+  const gap = d >= 2 ? 0.7 : d === 1 ? 0.55 : 0.4;
+  b.box(2.2, 0.55, 0.9, 0.3, 'wood');
+  b.box(3.1, 1.0, 3.3, 0.3, 'wood');
+  b.box(6.4 + gap, hi, 3.6 - gap, 0.3, 'wood');
+  b.box(10 + gap, 1.0, 3.3 - gap, 0.3, 'wood');
+  b.box(13.3, 0.55, 0.9, 0.3, 'wood');
+  b.ground(3.1, 11, -1.6, 'mud');
+  b.zone('kill', 3.1, -1.6, 11, 0.6, { tag: 'puddle' });
   b.ground(14, 3);
   b.deco('frame', 8.5, 0, -0.5, 1, { s: hi });
-  b.hint(2.4, 'jump');
+  b.hint(1.8, 'jump');
+  b.hint(2.8, 'jump');
   b.hint(6.2, 'jump');
-  b.hint(13.9, 'jump');
-  b.coin(8.6, hi + 1.4);
+  b.hint(6.3, 'gap');
+  b.hint(9.95, 'gap');
+  b.coin(8.3, hi + 1.4);
   return { w: 17, par: 34 };
 };
 
 const pWind: Piece = (b, d) => {
   b.ground(0, 16);
-  b.box(4, 0.9, 8, 0.3, 'bench');
-  b.deco('benchlegs', 8, 0, 0, 1);
-  b.zone('wind', 0, 0, 16, 5, { fx: d >= 1 ? -22 : -15, fy: 2, period: 6.5, duty: 0.45, tag: 'gust' });
-  b.hint(3.5, 'jump');
+  b.block(5, 0, 1.2, 0.4, 'toyblock');
+  b.block(11, 0, 1.2, 0.4, 'toyblock');
+  b.zone('wind', 0, 0, 16, 5, { fx: d >= 1 ? -20 : -14, fy: 2, period: 6.5, duty: 0.45, tag: 'gust' });
+  b.hint(4, 'jump');
+  b.hint(10, 'jump');
   b.coin(8, 2.5);
   b.deco('tree', 13, 0, -3.8, 1.2);
+  b.deco('bench', 8, 0, -1.4, 1);
   return { w: 16, par: 24 };
 };
 
@@ -507,7 +529,9 @@ const pSeesaw: Piece = (b) => {
   b.ground(11, 4);
   b.ground(4, 7, -1.4, 'mud');
   b.zone('kill', 4, -1.4, 7, 0.6, { tag: 'puddle' });
-  b.prop({ kind: 'seesaw', x: 7.5, y: -0.14, w: 6.6, h: 0.28, mass: 1.8, mat: 'wood' });
+  b.prop({ kind: 'seesaw', x: 7.5, y: 0.02, w: 6.6, h: 0.28, mass: 1.8, mat: 'wood' });
+  b.hint(3.4, 'jump');
+  b.hint(10.6, 'jump');
   b.deco('seesawbase', 7.5, -1.4, 0, 1);
   b.coin(7.5, 1.8);
   return { w: 15, par: 24 };
@@ -638,14 +662,32 @@ export function weeklySpec(date = new Date()): CourseSpec {
   return { biome: rng.pick(BIOME_ORDER), index: -2, seed, label: 'Weekly Challenge' };
 }
 
-export function buildCourse(spec: CourseSpec): CourseDef {
+/** Test helper: a course of [start, ...named pieces, goal] at a given difficulty. */
+export function buildTestCourse(biome: BiomeId, pieceNames: string[], d: number): CourseDef {
+  const pool = BIOMES[biome].pool;
+  const pieces = pieceNames.map((n) => {
+    const p = pool.find((q) => q.name === n);
+    if (!p) throw new Error('unknown piece ' + n);
+    return p;
+  });
+  return buildCourse({ biome, index: 0, label: 'test' }, { pieces, d });
+}
+
+export function piecesOf(biome: BiomeId): string[] {
+  return BIOMES[biome].pool.map((p) => p.name);
+}
+
+export function buildCourse(spec: CourseSpec, override?: { pieces: Piece[]; d: number }): CourseDef {
   const biome = BIOMES[spec.biome];
   let pieces: Piece[];
   let d: number;
   let twist = NO_TWIST;
   let name = courseName(spec);
   const rng = new Rng(hashString(courseId(spec)));
-  if (spec.index >= 0) {
+  if (override) {
+    pieces = override.pieces;
+    d = override.d;
+  } else if (spec.index >= 0) {
     const c = biome.courses[spec.index];
     pieces = c.pieces;
     d = c.d;
@@ -664,10 +706,12 @@ export function buildCourse(spec: CourseSpec): CourseDef {
   const checkpoints: Checkpoint[] = [];
   let par = 0;
   const all = [biome.start, ...pieces, biome.goal];
+  const sections: CourseDef['sections'] = [];
   all.forEach((piece, i) => {
     if (i > 0) checkpoints.push({ x: b.ox + 1.3, y: b.oy });
     else checkpoints.push({ x: b.ox + 3.2, y: b.oy });
     const out = piece(b, d, rng);
+    sections.push({ name: piece.name, x0: b.ox, x1: b.ox + out.w });
     par += out.par;
     b.ox += out.w;
     b.oy += out.exitY ?? 0;
@@ -705,6 +749,7 @@ export function buildCourse(spec: CourseSpec): CourseDef {
     hints: b.hints.sort((a, c) => a.x - c.x),
     decor: b.decor,
     killY: biome.floorY - 3,
+    sections,
     bounds: { minX: 0, maxX: width, minY: biome.floorY - 1, maxY: b.maxTop + 8 },
     twist,
   };

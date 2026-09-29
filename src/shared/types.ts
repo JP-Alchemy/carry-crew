@@ -48,6 +48,8 @@ export interface Mover {
   mat: string;
   /** Knocks players/cargo on contact (hazard) rather than just being a platform. */
   knock?: { x: number; y: number; damage: number };
+  /** Bots don't need to time this one (e.g. a car driving under a bridge). */
+  botIgnore?: boolean;
 }
 
 export interface Prop {
@@ -80,7 +82,7 @@ export interface Decor {
 
 export interface BotHint {
   x: number;
-  a: 'jump' | 'climb' | 'wait';
+  a: 'jump' | 'gap' | 'wait'; // jump: step up (carriers hop together) · gap: each body hops at the edge
 }
 
 export interface CourseDef {
@@ -102,6 +104,7 @@ export interface CourseDef {
   hints: BotHint[];
   decor: Decor[];
   killY: number;
+  sections: { name: string; x0: number; x1: number }[];
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
   twist: Twist;
 }
@@ -132,6 +135,8 @@ export interface PlayerInput {
   grab: boolean;
   jumpN: number; // press counters (robust to dropped packets / tick timing)
   diveN: number;
+  /** Bots only: when grabbing, only take hold of solid things (not the rope). */
+  ledge?: boolean;
 }
 
 export const emptyInput = (): PlayerInput => ({ mx: 0, up: false, down: false, grab: false, jumpN: 0, diveN: 0 });
@@ -175,6 +180,7 @@ export type GameEvent =
   | { e: 'grab'; p: number; what: 'cargo' | 'rope' | 'ledge' | 'prop'; x: number; y: number }
   | { e: 'panic'; p: number }
   | { e: 'release'; p: number }
+  | { e: 'slip'; p: number }
   | { e: 'dive'; p: number }
   | { e: 'ouch'; p: number; kind: 'heat' | 'knock' | 'water' }
   | { e: 'damage'; amount: number; x: number; y: number }
@@ -202,6 +208,7 @@ export interface PlayerSnap {
   st: number; // stamina 0..1
   s: number; // state: 0 normal, 1 diving, 2 flopped, 3 hanging
   pu: 0 | 1; // panic grab used
+  c?: 0 | 1; // holding the cargo
 }
 
 export interface Snapshot {

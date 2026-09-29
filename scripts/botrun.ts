@@ -26,11 +26,13 @@ for (const spec of specs) {
     }
     if (process.env.TRACE && k % 300 === 0) {
       const c = sim.cargoPos();
-      console.log(`  t=${sim.time.toFixed(0)} cp=${sim.cp} cargo=(${c.x.toFixed(1)},${c.y.toFixed(1)}) held=${sim.holders()} dmg=${sim.damage.toFixed(0)} players=${sim.players.map(p=>{const t=p.body.translation();return `${t.x.toFixed(1)},${t.y.toFixed(1)}${p.grab?p.grab.kind[0]:''}`}).join(' ')}`);
+      console.log(`  t=${sim.time.toFixed(0)} cp=${sim.cp} cargo=(${c.x.toFixed(1)},${c.y.toFixed(1)}) held=${sim.holders()} dmg=${sim.damage.toFixed(0)} players=${sim.players.map(p=>{const t=p.body.translation();return `${t.x.toFixed(1)},${t.y.toFixed(1)}${p.grab?p.grab.kind[0]:''}:${p.brain.mode}${p.grounded?'':'^'}`}).join(' ')}`);
     }
     if (sim.time - lastCpT > 150) break;
   }
   const ms = performance.now() - t0;
-  console.log(`${course.id.padEnd(12)} ${course.name.padEnd(28)} ${sim.status.padEnd(9)} cp ${sim.cp}/${course.checkpoints.length - 1} time ${sim.time.toFixed(0)}s par ${course.parTime} dmg ${sim.damage.toFixed(0)} resets ${resets} (drops ${drops}) stars ${sim.starsFor()} cps@${cpTimes.join(',')} [${(ms / (sim.t * 1000 / 1000)).toFixed(2)}ms/simsec]`);
+  const cx = sim.cargoPos().x;
+  const sec = course.sections.find((q) => cx >= q.x0 && cx < q.x1);
+  console.log(`${course.id.padEnd(12)} @${sec?.name}+${sec ? (cx - sec.x0).toFixed(1) : '?'} ${course.name.padEnd(28)} ${sim.status.padEnd(9)} cp ${sim.cp}/${course.checkpoints.length - 1} time ${sim.time.toFixed(0)}s par ${course.parTime} dmg ${sim.damage.toFixed(0)} resets ${resets} (drops ${drops}) stars ${sim.starsFor()} cps@${cpTimes.join(',')} [${(ms / (sim.t * 1000 / 1000)).toFixed(2)}ms/simsec]`);
   sim.free();
 }

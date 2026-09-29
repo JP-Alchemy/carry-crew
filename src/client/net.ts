@@ -21,8 +21,8 @@ export class Net {
   private ws: WebSocket | null = null;
   private handlers = new Set<Handler>();
   id = '';
-  rtt = 0;
   closed = false;
+  lastError = '';
   onClose?: () => void;
 
   async connect(timeoutMs = 4000): Promise<boolean> {
@@ -60,6 +60,9 @@ export class Net {
         if (m.t === 'welcome') {
           this.id = m.id;
           finish(true);
+        } else if (m.t === 'error' && !this.id) {
+          // e.g. "please refresh" on a protocol version mismatch
+          this.lastError = m.msg;
         }
         this.handlers.forEach((h) => h(m));
       };

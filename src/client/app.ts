@@ -262,6 +262,7 @@ export class App {
     this.session = s;
     this.mode = 'demo';
     this.renderer.localSlots = [];
+    this.renderer.focusShift = matchMedia('(max-width: 760px)').matches ? 0 : 0.22;
     this.renderer.setCourse(s.course, crew);
     this.hud.innerHTML = '';
     this.hud.hidden = true;
@@ -304,6 +305,7 @@ export class App {
     this.spec = spec;
     this.mode = mode;
     this.localCount = humans;
+    this.renderer.focusShift = 0;
     this.input.bind(humans);
     this.renderer.localSlots = localSlots;
     this.renderer.setCourse(s.course, crew);
@@ -327,6 +329,7 @@ export class App {
     this.session = s;
     this.spec = m.spec;
     this.localCount = 1;
+    this.renderer.focusShift = 0;
     this.input.bind(1);
     this.renderer.localSlots = [m.slot];
     this.renderer.setCourse(s.course, m.crew);
@@ -934,6 +937,7 @@ export class App {
     const net = new Net();
     const ok = await net.connect();
     if (!ok) {
+      if (net.lastError) this.toast(net.lastError);
       net.close();
       return false;
     }
@@ -1029,7 +1033,7 @@ export class App {
   }
 
   private showLobby(l: LobbyState) {
-    const myId = profile().id;
+    const myId = this.net?.id || profile().id;
     const host = l.hostId === myId;
     if (l.mode === 'quick') {
       let s = this.ui.querySelector<HTMLElement>('.quick-lobby');

@@ -17,12 +17,14 @@ export interface BotBrain {
   ping?: { kind: PingKind; x: number; y: number; t: number };
   climbT: number;
   seenHumanJump: number;
-  vault: number;
   slot: number; // -1 left carrier, 1 right carrier, 0 none
+  blockT: number;
+  lowT: number;
+  mode: string; // for debugging
 }
 
 export function newBotBrain(i: number): BotBrain {
-  return { jumpN: 0, diveN: 0, jumpCd: 0.3 + i * 0.05, stuckT: 0, lastX: 0, climbT: 0, seenHumanJump: 0, vault: 0, slot: 0 };
+  return { jumpN: 0, diveN: 0, jumpCd: 0.3 + i * 0.05, stuckT: 0, lastX: 0, climbT: 0, seenHumanJump: 0, slot: 0, mode: '', blockT: 0, lowT: 0 };
 }
 
 const SOLID_GROUPS = C.groups(C.G_PLAYER, C.G_TERRAIN | C.G_PROP);
@@ -35,81 +37,76 @@ function rayHit(sim: Sim, x: number, y: number, dx: number, dy: number, len: num
   return hit ? hit.timeOfImpact : -1;
 }
 
-/** Decide who carries. Called once per step before bot inputs. */
+/** Decide who carries: the bots nearest the cargo, one per side. */
 export function planCrew(sim: Sim) {
   const ps = sim.players;
   const ct = sim.cargoPos();
   const want = Math.min(ps.length, 2);
-  const sideOf = (k: number) => Math.sign(ps[k].body.translation().x - ct.x) || 1;
   const holding = ps.map((p) => p.grab?.kind === 'cargo');
-  const taken = new Map<number, number>(); // side -> player
-  ps.forEach((_, k) => {
-    if (holding[k]) taken.set(sideOf(k), k);
-  });
+  const sideOf = (k: number) => Math.sign(ps[k].body.translation().x - ct.x) || 1;
+  const sides = new Set<number>();
   ps.forEach((p, k) => {
-    if (!p.bot) p.brain.slot = 0;
-    else if (holding[k]) p.brain.slot = sideOf(k);
-    else if (p.brain.slot !== 0 && taken.has(p.brain.slot)) p.brain.slot = 0;
+    if (holding[k]) {
+      p.brain.slot = sideOf(k);
+      sides.add(p.brain.slot);
+    } else if (!p.bot) p.brain.slot = 0;
   });
-  if (want === 1) {
-    if (!holding.some(Boolean)) {
-      const k = ps.findIndex((p) => p.bot);
-      if (k >= 0 && ps[k].brain.slot === 0) ps[k].brain.slot = -sideOf(k) || -1;
+  // Drop assignments that clash with a side someone already holds.
+  ps.forEach((p, k) => {
+    if (p.bot && !holding[k] && p.brain.slot !== 0) {
+      if (sides.has(p.brain.slot) || sides.size >= want) p.brain.slot = 0;
+      else sides.add(p.brain.slot);
     }
-    return;
-  }
-  for (const side of [-1, 1]) {
-    if (taken.has(side)) continue;
-    if (ps.some((p) => p.bot && p.brain.slot === side)) continue;
-    const mate = taken.get(-side) ?? ps.findIndex((p) => p.bot && p.brain.slot === -side);
-    let best = -1;
-    let bestCost = Infinity;
-    ps.forEach((p, k) => {
-      if (!p.bot || holding[k] || p.brain.slot !== 0) return;
-      const x = p.body.translation().x;
-      let cost = Math.abs(x - (ct.x + side));
-      if (Math.sign(x - ct.x) !== side) cost += 2.5; // needs to vault
-      if (mate >= 0) {
-        // Rope order: the left carrier should sit just before the right carrier on the rope.
-        const wantIdx = side < 0 ? mate - 1 : mate + 1;
-        if (k !== wantIdx) cost += 4 + Math.abs(k - wantIdx);
-      }
-      if (cost < bestCost) {
-        bestCost = cost;
-        best = k;
-      }
-    });
-    if (best >= 0) ps[best].brain.slot = side;
+  });
+  while (sides.size < want) {
+    const free = ps
+      .map((p, k) => ({ p, k, d: Math.hypot(p.body.translation().x - ct.x, p.body.translation().y - ct.y) }))
+      .filter((o) => o.p.bot && !holding[o.k] && o.p.brain.slot === 0)
+      .sort((a, b) => a.d - b.d);
+    if (!free.length) return;
+    const o = free[0];
+    let side = sideOf(o.k);
+    if (sides.has(side)) side = -side;
+    o.p.brain.slot = side;
+    sides.add(side);
   }
 }
 
 /** Is it dangerous to walk the span [lo, hi] forward (dir) at `speed` over the next moments? */
 function dangerAhead(sim: Sim, lo: number, hi: number, y: number, dir: number, speed: number): boolean {
-  const lookT = 2.6;
-  for (const z of sim.course.zones) {
-    if (z.kind !== 'heat' && z.kind !== 'water' && !(z.kind === 'wind' && (z.duty ?? 1) < 0.5)) continue;
-    if (Math.abs(y - z.y) > z.h / 2 + 1.5) continue;
-    const zl = z.x - z.w / 2;
-    const zr = z.x + z.w / 2;
-    if (hi > zl && lo < zr) continue; // already inside: keep going
-    const nearEdge = dir > 0 ? zl - hi : lo - zr;
-    if (nearEdge < 0 || nearEdge > 1.3) continue;
-    const clear = (dir > 0 ? zr - lo : hi - zl) / speed + 0.35;
-    for (let tau = 0; tau <= clear; tau += 0.1) {
-      const l = lo + dir * speed * tau;
-      const h = hi + dir * speed * tau;
-      if (h > zl && l < zr && sim.zoneActive(z, sim.t + tau)) return true;
+  // Hazard zones: once we step into one we keep going, so decide before the first of a group
+  // (e.g. a row of burners) whether the whole group can be crossed at walking pace.
+  const zs = sim.course.zones.filter((z) => (z.kind === 'heat' || z.kind === 'water') && Math.abs(y - z.y) < z.h / 2 + 1.5);
+  const inside = zs.some((z) => hi > z.x - z.w / 2 && lo < z.x + z.w / 2);
+  if (!inside) {
+    const ahead = zs
+      .map((z) => ({ z, near: dir > 0 ? z.x - z.w / 2 - hi : lo - (z.x + z.w / 2) }))
+      .filter((o) => o.near >= 0 && o.near < 7)
+      .sort((a, b) => a.near - b.near);
+    if (ahead.length && ahead[0].near < 1.3) {
+      const far = Math.max(...ahead.map((o) => (dir > 0 ? o.z.x + o.z.w / 2 - lo : hi - (o.z.x - o.z.w / 2))));
+      for (let tau = 0; tau <= far / speed + 0.3; tau += 0.1) {
+        const l = lo + dir * speed * tau;
+        const h = hi + dir * speed * tau;
+        for (const { z } of ahead) if (h > z.x - z.w / 2 && l < z.x + z.w / 2 && sim.zoneActive(z, sim.t + tau)) return true;
+      }
     }
   }
+  const lookT = 2.8;
   for (const m of sim.movers) {
-    if (!m.def.knock) continue;
+    if (!m.def.knock || m.def.botIgnore) continue;
     const path = m.def.path;
-    const ext = path.type === 'line' ? [Math.min(path.ax, path.bx) - m.def.w / 2, Math.max(path.ax, path.bx) + m.def.w / 2] : [-Infinity, Infinity];
-    if ((dir > 0 ? ext[0] - hi : lo - ext[1]) > 1.3) continue;
-    const passT = dir > 0 ? (ext[1] - lo) / speed : (hi - ext[0]) / speed;
+    const reach =
+      path.type === 'line'
+        ? [Math.min(path.ax, path.bx) - m.def.w / 2, Math.max(path.ax, path.bx) + m.def.w / 2]
+        : path.type === 'pendulum'
+          ? [path.px - path.len * Math.sin(path.amp) - m.def.w / 2, path.px + path.len * Math.sin(path.amp) + m.def.w / 2]
+          : [-Infinity, Infinity];
+    if ((dir > 0 ? reach[0] - hi : lo - reach[1]) > 1.3) continue;
+    const passT = dir > 0 ? (reach[1] - lo) / speed : (hi - reach[0]) / speed;
     if (passT < 0) continue;
     const overlaps = (pose: { x: number; y: number }, l: number, h: number) =>
-      h + 0.3 > pose.x - m.def.w / 2 && l - 0.3 < pose.x + m.def.w / 2 && !(pose.y - m.def.h / 2 > y + 1.3 || pose.y + m.def.h / 2 < y - 0.5);
+      h + 0.3 > pose.x - m.def.w / 2 && l - 0.3 < pose.x + m.def.w / 2 && !(pose.y - m.def.h / 2 > y + 1.0 || pose.y + m.def.h / 2 < y - 0.3);
     if (overlaps(sim.moverPose(m.def, sim.t), lo, hi)) continue; // already in it: move on
     for (let tau = 0; tau <= Math.min(lookT, passT + 0.2); tau += 0.1) {
       if (overlaps(sim.moverPose(m.def, sim.t + tau), lo + dir * speed * tau, hi + dir * speed * tau)) return true;
@@ -151,9 +148,14 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
 
   // Hanging from rope / ledge / prop: climb up, then let go toward the crew.
   if (p.grab && p.grab.kind !== 'cargo') {
+    br.mode = 'hang-' + p.grab.kind;
     inp.grab = true;
     br.climbT += dt;
-    if (p.grab.kind === 'ledge') inp.up = br.climbT > 0.25;
+    if (p.grab.kind === 'ledge') {
+      inp.up = br.climbT > 0.2;
+      inp.mx = p.facing;
+      return inp;
+    }
     else if (p.grab.kind === 'rope') {
       inp.up = true;
       if (br.climbT > 2.5 || p.stamina < 1) {
@@ -179,6 +181,7 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
 
   // ---------------------------------------------------------------- carrying
   if (p.grab?.kind === 'cargo') {
+    br.mode = 'carry';
     inp.grab = true;
     let mx: number;
     if (humanHolder) {
@@ -196,19 +199,45 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
       if (mx !== 0 && dangerAhead(sim, lo, hi, pos.y, dir, C.CARRY_SPEED)) mx = 0;
       if (pingWait) mx = 0;
       // Jump at hints, keyed on the cargo's front so both carriers jump together.
-      const front = (dir > 0 ? ct.x + cw / 2 + C.PLAYER_R * 2 : ct.x - cw / 2 - C.PLAYER_R * 2) + dir * 0.2;
+      const lead = (dir > 0 ? ct.x + cw / 2 + C.PLAYER_R * 2 : ct.x - cw / 2 - C.PLAYER_R * 2) + dir * 0.2;
       for (const h of sim.course.hints) {
-        if (h.a !== 'jump') continue;
-        const d = (h.x - front) * dir;
-        if (d > -0.15 && d < 0.3 && mx !== 0) {
-          jump();
-          break;
+        if (mx === 0) break;
+        if (h.a === 'jump') {
+          const d = (h.x - lead) * dir;
+          if (d > -0.15 && d < 0.3) {
+            jump();
+            break;
+          }
+        } else if (h.a === 'gap') {
+          const d = (h.x - pos.x) * dir;
+          if (d > -0.05 && d < 0.35 && (p.grounded || p.restT > 0.2)) {
+            br.jumpCd = 0;
+            jump();
+            break;
+          }
         }
+      }
+      // Cargo snagged on something? Everyone hops together.
+      if (mx !== 0 && Math.abs(main.body.linvel().x) < 0.35) br.blockT += dt;
+      else br.blockT = Math.max(0, br.blockT - dt);
+      // The front carrier steps up first; the back one follows a moment later.
+      const front = Math.sign(pos.x - ct.x) === dir;
+      if (br.blockT > (front ? 0.3 : 0.6) && (p.grounded || p.restT > 0.2)) {
+        br.jumpCd = 0;
+        jump();
+        br.blockT = -0.3;
       }
       if (mx !== 0 && p.grounded && Math.sign(pos.x - ct.x) === dir) {
         const wall = rayHit(sim, pos.x, pos.y - C.PLAYER_R * 0.4, dir, 0, C.PLAYER_R + 0.35, p.collider);
         if (wall >= 0) jump();
       }
+    }
+    // Fell well below the cargo (into a gap or a lane)? Let go and climb back up.
+    br.lowT = ct.y - pos.y > 1.05 ? br.lowT + dt : 0;
+    if (br.lowT > 1) {
+      inp.grab = false;
+      br.lowT = 0;
+      return inp;
     }
     // Cargo hanging off a ledge below us: pull it back up.
     if (ct.y < pos.y - 1.2 && p.grounded) mx = -Math.sign(ct.x - pos.x);
@@ -217,33 +246,31 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
     return inp;
   }
 
+  // ---------------------------------------------------------------- stuck in a pit below the crew?
+  br.lowT = p.grounded && ct.y - pos.y > 1.0 && Math.abs(pos.x - ct.x) < 5 ? br.lowT + dt : Math.max(0, br.lowT - dt);
+  if (br.lowT > 1.5) {
+    // Climb our own rope up to the crew.
+    br.mode = 'pit';
+    inp.grab = true;
+    inp.up = true;
+    if (br.lowT > 4) br.lowT = 0;
+    return inp;
+  }
+
   // ---------------------------------------------------------------- fetch the cargo
-  const side = ping?.kind === 'grab' && br.slot === 0 ? Math.sign(pos.x - ct.x) || -1 : br.slot;
-  if (side !== 0 && !(ping && ping.kind === 'go')) {
+  if ((br.slot !== 0 || ping?.kind === 'grab') && !(ping && ping.kind === 'go')) {
+    const side = br.slot || Math.sign(pos.x - ct.x) || -1;
+    br.mode = 'fetch';
     if (p.onCargo) {
-      inp.mx = side; // step off toward our side
+      inp.mx = side; // step off
       return inp;
     }
-    const tx = ct.x + side * (edge + 0.06);
+    const tx = ct.x + side * (edge + 0.05);
     const dx = tx - pos.x;
     const dy = ct.y - pos.y;
-    const mySide = Math.sign(pos.x - ct.x) || side;
-    if (mySide !== side && Math.abs(dy) < 1.2) {
-      // Our side is beyond the cargo: back off, then run and vault over it.
-      const gap = Math.abs(pos.x - ct.x) - edge;
-      if (br.vault === 0 && gap < 1.0) inp.mx = mySide;
-      else {
-        br.vault = 1;
-        inp.mx = side;
-        if (gap < 0.5 && p.grounded) jump();
-        if (gap > 2.5) br.vault = 0;
-      }
-      stuckCheck(sim, i, inp, inp.mx, jump, dt);
-      return inp;
-    }
-    br.vault = 0;
-    if (Math.abs(dx) < 0.22 && Math.abs(dy) < 1.1) {
+    if (Math.abs(dx) < 0.3 && Math.abs(dy) < 1.1) {
       inp.grab = true;
+      inp.mx = -side * 0.25; // face the cargo
       return inp;
     }
     inp.mx = Math.max(-1, Math.min(1, dx * 1.5));
@@ -254,6 +281,7 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
   }
 
   // ---------------------------------------------------------------- follow in rope order
+  br.mode = 'follow';
   let tx: number;
   const carriers = sim.players.map((q, k) => (q.grab?.kind === 'cargo' || q.brain.slot !== 0 ? k : -1)).filter((k) => k >= 0);
   if (ping && (ping.kind === 'go' || ping.kind === 'help')) {
@@ -282,7 +310,7 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
   inp.mx = mx;
   if (mx !== 0) navigate(sim, i, inp, jump, pos, Math.sign(mx), Math.abs(dx) > 2.2);
   // Dangling below the crew? Grab the rope and climb.
-  if (!p.grounded && pos.y < ct.y - 1.4 && vel.y < 0.5) inp.grab = true;
+  if (!p.grounded && pos.y < ct.y - 2.2 && vel.y < 0.5) inp.grab = true;
   stuckCheck(sim, i, inp, mx, jump, dt);
   return inp;
 }
@@ -291,7 +319,7 @@ function navigate(sim: Sim, i: number, inp: PlayerInput, jump: () => void, pos: 
   const p = sim.players[i];
   if (!p.grounded) return;
   for (const h of sim.course.hints) {
-    if (h.a !== 'jump') continue;
+    if (h.a === 'wait') continue;
     const d = (h.x - pos.x) * dir;
     if (d > 0 && d < 0.55) {
       jump();
@@ -303,7 +331,8 @@ function navigate(sim: Sim, i: number, inp: PlayerInput, jump: () => void, pos: 
     jump();
     return;
   }
-  const ground = rayHit(sim, pos.x + dir * 0.75, pos.y, 0, -1, 3, p.collider);
+  // A gap is only a gap if it's wider than we are.
+  const ground = Math.max(...[0.55, 0.8, 1.05].map((o) => rayHit(sim, pos.x + dir * o, pos.y, 0, -1, 3, p.collider)));
   if (ground < 0) {
     if (farTarget) jump();
     else inp.mx = 0;
@@ -317,9 +346,13 @@ function stuckCheck(sim: Sim, i: number, inp: PlayerInput, mx: number, jump: () 
   if (Math.abs(mx) > 0.3 && Math.abs(x - br.lastX) < 0.02) br.stuckT += dt;
   else br.stuckT = Math.max(0, br.stuckT - dt * 2);
   br.lastX = x;
-  if (br.stuckT > 1.2) {
-    jump();
-    if (br.stuckT > 2.5 && p.grab?.kind !== 'cargo') inp.grab = true;
+  if (br.stuckT > 1.0) {
+    if (p.grounded || p.restT > 0.2) jump();
+    else if (p.grab?.kind !== 'cargo') {
+      // Wedged against a wall in mid-air (the rope holds us)? Grab the edge and climb over.
+      inp.grab = true;
+      inp.ledge = true;
+    }
     if (br.stuckT > 4) br.stuckT = 0;
   }
 }

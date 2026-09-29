@@ -370,6 +370,10 @@ function decorMesh(d: Decor): THREE.Object3D {
       g.add(box(0xb8c3cf, 0.6, 0.5, 0.5, 0, 1.15, 0));
       g.add(mesh(SPHERE(), toonUnique(0xff5a5a, { emissive: 0x550000 }), 0, 1.5, 0, 0.08, 0.08, 0.08));
       break;
+    case 'shelfleg':
+      g.add(box(0xb07d4f, 0.15, 0.82, 0.15, 0, 0.41, 0));
+      g.add(box(0xb07d4f, 0.15, 0.82, 0.15, 0, 0.41, -1.1));
+      break;
     case 'shelfback':
       g.add(box(0xd9b27c, 10, 6, 0.2, 0, 2.5, -0.8));
       break;

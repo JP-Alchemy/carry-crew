@@ -40,3 +40,5 @@ export const G_ROPE = 4;
 export const G_CARGO = 8;
 export const G_PROP = 16;
 export const groups = (member: number, filter: number) => ((member & 0xffff) << 16) | (filter & 0xffff);
+// Players pass through each other and the cargo (the rope and the carry grip tie things together).
+export const PLAYER_GROUPS = groups(G_PLAYER, G_TERRAIN | G_PROP);

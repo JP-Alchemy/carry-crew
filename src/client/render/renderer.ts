@@ -44,6 +44,9 @@ export class GameRenderer {
   private lastSnap?: Snapshot;
   localSlots: number[] = [];
   blocked = new Set<string>();
+  /** Shift the picture sideways (fraction of the width), e.g. to make room for the menu. */
+  focusShift = 0;
+  private shiftNow = 0;
   quality: Quality;
 
   constructor(
@@ -110,6 +113,7 @@ export class GameRenderer {
     crew.forEach((m, i) => {
       if (!this.chars[i]) {
         this.chars[i] = new CharacterView(m.look);
+        this.chars[i].lane = (i % 2 ? 0.12 : -0.12) * (i > 1 ? 2 : 1);
         this.scene.add(this.chars[i].group);
       } else this.chars[i].setLook(m.look);
     });
@@ -274,7 +278,7 @@ export class GameRenderer {
     if (!this.course || !this.world || !this.cargo) return;
     this.lastSnap = s;
     this.world.update(s, t, dt);
-    s.players.forEach((p, i) => this.chars[i]?.update(p, dt, t));
+    s.players.forEach((p, i) => this.chars[i]?.update(p, dt, t, s.cargo.parts[0]));
     this.cargo.update(s.cargo.parts, s.cargo.damage, s.cargo.slosh, t);
 
     // Rope chains: player → segments → player
@@ -335,6 +339,11 @@ export class GameRenderer {
     const sh = this.shake;
     this.camera.position.set(this.camPos.x + (Math.random() - 0.5) * sh, this.camPos.y + (Math.random() - 0.5) * sh, this.camPos.z);
     this.camera.lookAt(this.camLook);
+    this.shiftNow += (this.focusShift - this.shiftNow) * Math.min(1, dt * 4);
+    const cw = this.canvas.clientWidth || 1;
+    const ch = this.canvas.clientHeight || 1;
+    if (Math.abs(this.shiftNow) > 0.001) this.camera.setViewOffset(cw, ch, -this.shiftNow * cw, 0, cw, ch);
+    else this.camera.clearViewOffset();
     this.sun.position.set(this.camLook.x - 6, this.camLook.y + 14, 12);
     this.sun.target.position.set(this.camLook.x, this.camLook.y, 0);
   }
@@ -357,11 +366,16 @@ export class GameRenderer {
 
   private updateLabels(s: Snapshot) {
     const now = performance.now();
+    const placed: { x: number; y: number }[] = [];
     s.players.forEach((p, i) => {
       const tag = this.nameTags[i];
       if (!tag) return;
       const sc = this.worldToScreen(p.x, p.y + 0.75);
-      tag.style.transform = `translate(${sc.x}px, ${sc.y}px) translate(-50%, -100%)`;
+      // Stack tags that would overlap.
+      let y = sc.y;
+      for (let k = 0; k < 4 && placed.some((q) => Math.abs(q.x - sc.x) < 90 && Math.abs(q.y - y) < 18); k++) y -= 19;
+      placed.push({ x: sc.x, y });
+      tag.style.transform = `translate(${sc.x}px, ${y}px) translate(-50%, -100%)`;
       tag.classList.toggle('panic-used', !!p.pu);
       tag.classList.toggle('tired', p.st < 0.35);
     });
