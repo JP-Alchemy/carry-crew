@@ -68,8 +68,8 @@ describe('simulation', () => {
     }
   });
 
-  it('bots alone deliver the cake on the first kitchen course', () => {
-    const sim = new Sim(buildCourse({ biome: 'kitchen', index: 0 }), bots(3));
+  it.each(BIOME_ORDER.map((b) => [b] as const))('bots alone deliver the cargo on the first %s course', (biome) => {
+    const sim = new Sim(buildCourse({ biome, index: 0 }), bots(3));
     const events = run(sim, 240);
     expect(sim.status).toBe('delivered');
     expect(events).toContain('checkpoint');
