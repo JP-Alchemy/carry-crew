@@ -682,6 +682,7 @@ button:disabled {
   padding: 8px 16px;
   font-size: 17px;
 }
+.panel > button.big,
 .panel .row button.big {
   background: var(--mint);
   color: #fff;
@@ -1173,4 +1174,9 @@ button:disabled {
   #touch .tbtns {
     bottom: 24px;
   }
+}
+
+/* Your panic grab is ready (hold grab while falling). */
+.nametag.me:not(.panic-used)::before {
+  content: '✋ ';
 }

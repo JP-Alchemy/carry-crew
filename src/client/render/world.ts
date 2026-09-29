@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { CourseDef, Decor, Snapshot, Solid } from '../../shared/types';
 import { BOX, CONE, CYL, SPHERE, basic, box, geo, mesh, textTexture, toon, toonUnique } from './materials';
 
@@ -500,19 +501,26 @@ export function buildWorld(course: CourseDef, scene: THREE.Scene): WorldView {
   }
   root.add(back);
 
+  // Static scenery is merged into one mesh per material: hundreds of draw calls become a few dozen.
+  const statics = new THREE.Group();
   course.solids.forEach((s, i) => {
     const m = solidMesh(s, i);
-    if (m) root.add(m);
+    if (m) statics.add(m);
   });
   const spinners: THREE.Object3D[] = [];
   const clouds: THREE.Object3D[] = [];
   for (const d of course.decor) {
     const m = decorMesh(d);
+    let spins = false;
     m.traverse((o) => {
-      if (o.name === 'spin') spinners.push(o);
+      if (o.name === 'spin') {
+        spinners.push(o);
+        spins = true;
+      }
     });
-    root.add(m);
+    (spins ? root : statics).add(m);
   }
+  root.add(mergeStatic(statics));
   back.traverse((o) => {
     if (o.name === 'cloud') clouds.push(o);
   });
@@ -671,10 +679,44 @@ export function buildWorld(course: CourseDef, scene: THREE.Scene): WorldView {
       scene.remove(root);
       root.traverse((o) => {
         const m = o as THREE.Mesh;
+        if (m.userData.owned) m.geometry.dispose();
         if (m.material && !Array.isArray(m.material) && (m.material as THREE.MeshBasicMaterial).map) (m.material as THREE.MeshBasicMaterial).map!.dispose();
       });
     },
   };
+}
+
+function mergeStatic(src: THREE.Object3D): THREE.Group {
+  src.updateMatrixWorld(true);
+  const buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const keep: THREE.Mesh[] = [];
+  src.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mat = m.material as THREE.Material & { map?: THREE.Texture | null };
+    if (Array.isArray(m.material) || mat.map || mat.transparent) {
+      keep.push(m);
+      return;
+    }
+    let g = m.geometry.clone().applyMatrix4(m.matrixWorld);
+    for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
+    if (g.index) g = g.toNonIndexed();
+    let list = buckets.get(mat);
+    if (!list) buckets.set(mat, (list = []));
+    list.push(g);
+  });
+  const out = new THREE.Group();
+  for (const [mat, list] of buckets) {
+    const merged = mergeGeometries(list);
+    list.forEach((g) => g.dispose());
+    if (merged) {
+      const mesh = new THREE.Mesh(merged, mat);
+      mesh.userData.owned = true;
+      out.add(mesh);
+    }
+  }
+  for (const k of keep) out.attach(k);
+  return out;
 }
 
 function tileTexture(a: string, b: string) {

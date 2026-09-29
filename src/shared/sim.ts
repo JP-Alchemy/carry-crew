@@ -975,8 +975,11 @@ export class Sim {
       h.body.applyImpulse({ x: (-fx * 0.45 * dt) / n, y: (-Math.max(0, fy) * 0.25 * dt) / n - (h.grounded ? weight * dt : 0) }, true);
     }
     // Keep it level when carried properly; a lone holder lets it tilt.
-    const k = strong ? 14 : 3;
-    b.applyTorqueImpulse((-b.rotation() * k - b.angvel() * (strong ? 2.2 : 0.6)) * m * dt, true);
+    let rot = b.rotation() % (Math.PI * 2);
+    if (rot > Math.PI) rot -= Math.PI * 2;
+    if (rot < -Math.PI) rot += Math.PI * 2;
+    const k = strong ? 30 : 7;
+    b.applyTorqueImpulse((-rot * k - b.angvel() * (strong ? 3.5 : 1)) * m * dt, true);
     // Snagged too far from someone's hands? It slips.
     for (const h of holders) {
       const t = h.body.translation();

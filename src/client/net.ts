@@ -25,7 +25,7 @@ export class Net {
   lastError = '';
   onClose?: () => void;
 
-  async connect(timeoutMs = 4000): Promise<boolean> {
+  async connect(timeoutMs = 9000): Promise<boolean> {
     const base = serverBase();
     if (!base) return false;
     return new Promise((resolve) => {

@@ -7,6 +7,7 @@ A co-op physics comedy for the browser. Two to four toy-sized friends are tied t
 This repository is the playable prototype from the game design document. It has three biomes with three courses each, online crews (quick match and friends rooms) with bots filling the empty seats, solo play with bot buddies, couch co-op, daily and weekly challenge courses, pings and emotes instead of chat, cosmetics, and clip saving.
 
 ![title screen](docs/menu.png)
+![carrying the cake](docs/gameplay.png)
 
 ## Quick start
 
