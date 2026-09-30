@@ -107,7 +107,7 @@ export function validateSpec(spec: unknown): CourseSpec | null {
   if (!isObj(spec)) return null;
   const { biome, index, seed } = spec;
   if (typeof biome !== 'string' || !Object.prototype.hasOwnProperty.call(BIOMES, biome)) return null;
-  if (index === 0 || index === 1 || index === 2) return { biome: biome as BiomeId, index };
+  if (Number.isInteger(index) && (index as number) >= 0 && (index as number) < BIOMES[biome as BiomeId].courses.length) return { biome: biome as BiomeId, index: index as number };
   for (const cur of [dailySpec(), weeklySpec()]) if (index === cur.index && seed === cur.seed && biome === cur.biome) return cur;
   return null;
 }

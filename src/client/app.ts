@@ -231,6 +231,13 @@ export class App {
         case 'kick':
           sfx('kick');
           break;
+        case 'boing':
+          sfx('boing');
+          break;
+        case 'tumble':
+          sfx('thud');
+          if (Math.random() < 0.5) voice(e.kind === 'yank' ? 'Whoaaa!' : 'Oof!', pitch(e.p));
+          break;
         case 'ping':
           if (!this.renderer.blocked.has(crew[e.p]?.id ?? '')) {
             sfx('pop');
@@ -403,6 +410,7 @@ export class App {
         <div class="hud-course"><b>${esc(c.name)}</b><span class="hud-time">0:00</span><small>par ${fmtTime(c.parTime)}</small></div>
         <div class="hud-progress"><div class="bar"><div class="fill"></div>${ticks}</div><div class="mark">${icon}</div><div class="goal">🏁</div></div>
         <div class="hud-cargo"><span class="icon">${icon}</span><div class="meter"><div class="fill"></div></div><span class="pct">100%</span></div>
+        ${c.vertical ? '<div class="hud-height">↑ <span>0</span> m</div>' : ''}
         <div class="hud-stars">⭐ <span>0</span>/${c.collectibles.length}</div>
         <button class="hud-btn hud-pause" title="Pause (Esc)">⏸</button>
       </div>
@@ -541,6 +549,8 @@ export class App {
     }
     const pct = q('.hud-cargo .pct');
     if (pct) pct.textContent = `${Math.round(intact)}%`;
+    const hgt = q('.hud-height span');
+    if (hgt) hgt.textContent = String(Math.max(0, Math.round((s.cargo.parts[1] - c.checkpoints[0].y) * 10) / 10).toFixed(0));
     const st = q('.hud-stars span');
     if (st) st.textContent = String(s.collected.length);
     if (s.events.some((e) => e.e === 'damage')) {
@@ -641,7 +651,7 @@ export class App {
                 .map((c, i) => {
                   const id = courseId({ biome: b, index: i });
                   const best = p.best[id];
-                  return `<button class="course" data-b="${b}" data-i="${i}"><b>${i + 1}. ${esc(c.name)}</b><span class="stars">${starsHtml(p.stars[id] ?? 0)}</span><small>${best ? 'best ' + fmtTime(best.time) : ['Easy', 'Medium', 'Hard'][c.d]}</small></button>`;
+                  return `<button class="course" data-b="${b}" data-i="${i}"><b>${i + 1}. ${esc(c.name)}</b><span class="stars">${starsHtml(p.stars[id] ?? 0)}</span><small>${best ? 'best ' + fmtTime(best.time) : c.pieces.length && i === 3 ? '🗼 Tower climb' : ['Easy', 'Medium', 'Hard'][c.d]}</small></button>`;
                 })
                 .join('')}</div>`;
           }).join('')}
@@ -969,7 +979,7 @@ export class App {
   private nextSpec(): CourseSpec | null {
     const sp = this.spec;
     if (!sp || sp.index < 0) return null;
-    if (sp.index < 2) return { biome: sp.biome, index: sp.index + 1 };
+    if (sp.index < BIOMES[sp.biome].courses.length - 1) return { biome: sp.biome, index: sp.index + 1 };
     const b = BIOME_ORDER.indexOf(sp.biome);
     return b + 1 < BIOME_ORDER.length ? { biome: BIOME_ORDER[b + 1], index: 0 } : null;
   }

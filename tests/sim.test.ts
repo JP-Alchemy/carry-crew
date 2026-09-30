@@ -172,6 +172,55 @@ describe('simulation', () => {
   });
 });
 
+describe('verticality and slapstick', () => {
+  it('a springboard charges up and flings the whole crew and the cargo', () => {
+    const sim = new Sim(buildTestCourse('kitchen', ['kLaunch'], 0), bots(3));
+    let boing = false;
+    let maxCargoY = -Infinity;
+    const minPlayerMaxY: number[] = [];
+    for (let k = 0; k < 60 * 30 && sim.status === 'playing'; k++) {
+      sim.step();
+      if (sim.snapshot().events.some((e) => e.e === 'boing')) boing = true;
+      maxCargoY = Math.max(maxCargoY, sim.cargoPos().y);
+      sim.players.forEach((p, i) => (minPlayerMaxY[i] = Math.max(minPlayerMaxY[i] ?? -Infinity, p.body.translation().y)));
+    }
+    expect(boing).toBe(true);
+    expect(maxCargoY).toBeGreaterThan(3);
+    for (const y of minPlayerMaxY) expect(y).toBeGreaterThan(2.5);
+    expect(sim.status).toBe('delivered');
+    sim.free();
+  });
+
+  it('bots ride the lift up a tower', () => {
+    const sim = new Sim(buildTestCourse('kitchen', ['kTLift'], 0), bots(3));
+    run(sim, 90);
+    expect(sim.status).toBe('delivered');
+    sim.free();
+  });
+
+  it('tower courses climb: the goal is far above the start', () => {
+    for (const biome of BIOME_ORDER) {
+      const c = buildCourse({ biome, index: 3 });
+      expect(c.vertical).toBe(true);
+      expect(c.goal.y - c.checkpoints[0].y).toBeGreaterThan(10);
+      expect(c.path.length).toBeGreaterThan(8);
+    }
+  });
+
+  it('a big fall knocks you silly (tumble) and you get back up', () => {
+    const sim = new Sim(buildCourse({ biome: 'kitchen', index: 0 }), { crew: [{ bot: false }] });
+    run(sim, 0.5);
+    const p = sim.players[0];
+    const t = p.body.translation();
+    p.body.setTranslation({ x: t.x, y: t.y + 5 }, true);
+    const events = run(sim, 1.5);
+    expect(events).toContain('tumble');
+    run(sim, 1.5);
+    expect(p.flopT).toBe(0);
+    expect(p.spin).toBe(0);
+  });
+});
+
 describe('safety', () => {
   it('only generates names from the safe word lists', () => {
     for (let i = 0; i < 200; i++) expect(isSafeName(randomName(i))).toBe(true);

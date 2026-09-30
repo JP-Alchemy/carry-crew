@@ -17,7 +17,7 @@ export interface Solid {
   tag?: string;
 }
 
-export type ZoneKind = 'heat' | 'water' | 'wind' | 'kill' | 'sand' | 'slippery';
+export type ZoneKind = 'heat' | 'water' | 'wind' | 'kill' | 'sand' | 'slippery' | 'launch';
 
 export interface Zone {
   kind: ZoneKind;
@@ -32,16 +32,18 @@ export interface Zone {
   duty?: number;
   phase?: number;
   tag?: string;
+  /** Springboards: where the flight should come down (absolute x, surface y). */
+  land?: { x: number; y: number };
 }
 
 export type MoverPath =
-  | { type: 'line'; ax: number; ay: number; bx: number; by: number; period: number; phase?: number; profile?: 'pingpong' | 'swipe' | 'sine' }
+  | { type: 'line'; ax: number; ay: number; bx: number; by: number; period: number; phase?: number; profile?: 'pingpong' | 'swipe' | 'sine' | 'dwell' }
   | { type: 'pendulum'; px: number; py: number; len: number; amp: number; period: number; phase?: number }
   | { type: 'spin'; x: number; y: number; speed: number }
   | { type: 'breathe'; x: number; y: number; amp: number; period: number };
 
 export interface Mover {
-  kind: 'paw' | 'car' | 'swing' | 'blade' | 'dog' | 'platform' | 'belt';
+  kind: 'paw' | 'car' | 'swing' | 'blade' | 'dog' | 'platform' | 'belt' | 'lift';
   w: number;
   h: number;
   path: MoverPath;
@@ -67,6 +69,15 @@ export interface Prop {
 export interface Checkpoint {
   x: number;
   y: number; // surface height at the checkpoint
+  wp?: number; // index into the course path where this checkpoint's piece starts
+}
+
+export interface Waypoint {
+  x: number;
+  y: number;
+  /** pad: wait on the springboard until it fires · lift: board the lift when it's down */
+  kind?: 'pad' | 'lift';
+  mover?: number;
 }
 
 export interface Decor {
@@ -82,6 +93,7 @@ export interface Decor {
 
 export interface BotHint {
   x: number;
+  y?: number; // surface height, for stacked floors (towers)
   a: 'jump' | 'gap' | 'wait'; // jump: step up (carriers hop together) · gap: each body hops at the edge
 }
 
@@ -104,6 +116,10 @@ export interface CourseDef {
   hints: BotHint[];
   decor: Decor[];
   killY: number;
+  /** The route the cargo takes (bots follow it; towers switch back and forth). */
+  path: Waypoint[];
+  /** Tower courses climb instead of crossing. */
+  vertical?: boolean;
   sections: { name: string; x0: number; x1: number }[];
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
   twist: Twist;
@@ -187,14 +203,16 @@ export type GameEvent =
   | { e: 'layer'; x: number; y: number } // cake layer / plate lost, fish splash...
   | { e: 'checkpoint'; i: number; x: number; y: number }
   | { e: 'drop'; x: number; y: number }
-  | { e: 'reset'; reason: 'fell' | 'drop' }
+  | { e: 'reset'; reason: 'fell' | 'drop' | 'stuck' }
   | { e: 'collect'; i: number; x: number; y: number; p: number }
   | { e: 'delivered' }
   | { e: 'kick'; x: number; y: number }
   | { e: 'ping'; p: number; kind: PingKind; x: number; y: number }
   | { e: 'emote'; p: number; kind: EmoteKind; target?: number }
   | { e: 'chat'; p: number; i: number }
-  | { e: 'fell'; p: number };
+  | { e: 'fell'; p: number }
+  | { e: 'boing'; x: number; y: number }
+  | { e: 'tumble'; p: number; kind: 'land' | 'yank' };
 
 export interface PlayerSnap {
   x: number;
@@ -209,6 +227,7 @@ export interface PlayerSnap {
   s: number; // state: 0 normal, 1 diving, 2 flopped, 3 hanging
   pu: 0 | 1; // panic grab used
   c?: 0 | 1; // holding the cargo
+  a?: number; // body tumble angle
 }
 
 export interface Snapshot {
@@ -222,6 +241,7 @@ export interface Snapshot {
   movers: number[]; // x,y,a triples
   props: number[]; // x,y,a triples
   zonesOn: number; // bitmask of periodic zones currently active (first 31)
+  pl?: number[]; // springboard charge 0..1, one per launch zone (in zone order)
   collected: number[];
   events: GameEvent[];
 }

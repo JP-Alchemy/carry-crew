@@ -12,6 +12,7 @@ import type {
   Prop,
   Solid,
   Twist,
+  Waypoint,
   Zone,
   ZoneKind,
 } from './types';
@@ -42,6 +43,7 @@ class Builder {
   cargoStart = { x: 0, y: 0 };
   goal = { x: 0, y: 0, w: 0, h: 0 };
   maxTop = 0;
+  path: Waypoint[] = [];
 
   constructor(floorY: number, baseMat: string) {
     this.floorY = floorY;
@@ -81,8 +83,8 @@ class Builder {
     this.track(this.oy + Math.max(y1, y2));
     return s;
   }
-  ball(cx: number, cy: number, d: number, mat: string) {
-    this.solids.push({ x: this.ox + cx, y: this.oy + cy, w: d, h: d, round: true, mat });
+  ball(cx: number, cy: number, d: number, mat: string, extra: Partial<Solid> = {}) {
+    this.solids.push({ x: this.ox + cx, y: this.oy + cy, w: d, h: d, round: true, mat, ...extra });
   }
   zone(kind: ZoneKind, x: number, bottom: number, w: number, h: number, extra: Partial<Zone> = {}) {
     this.zones.push({ kind, x: this.ox + x + w / 2, y: this.oy + bottom + h / 2, w, h, ...extra });
@@ -116,8 +118,17 @@ class Builder {
   coin(x: number, y: number) {
     this.coins.push({ x: this.ox + x, y: this.oy + y });
   }
-  hint(x: number, a: BotHint['a']) {
-    this.hints.push({ x: this.ox + x, a });
+  hint(x: number, a: BotHint['a'], y?: number) {
+    this.hints.push({ x: this.ox + x, a, ...(y === undefined ? {} : { y: this.oy + y }) });
+  }
+  /** Route waypoint for the cargo (bots follow the route). */
+  wp(x: number, y: number, kind?: Waypoint['kind'], mover?: number) {
+    this.path.push({ x: this.ox + x, y: this.oy + y, ...(kind ? { kind } : {}), ...(mover === undefined ? {} : { mover }) });
+  }
+  /** A springboard: stand on it together and it flings the whole crew. */
+  pad(x: number, top: number, w: number, fy: number, fx: number, style: string, land?: { x: number; y: number }) {
+    // Flush with the floor (drawn by the renderer), so you walk straight onto it.
+    this.zone('launch', x, top, w, 1.3, { fy, fx, tag: style, ...(land ? { land: { x: this.ox + land.x, y: this.oy + land.y } } : {}) });
   }
   deco(kind: string, x: number, y: number, z: number, s = 1, extra: Partial<Decor> = {}) {
     this.decor.push({ kind, x: this.ox + x, y: this.oy + y, z, s, ...extra });
@@ -551,6 +562,135 @@ const pGoal: Piece = (b) => {
 };
 
 // ------------------------------------------------------------------------------------------------
+// Verticality: springboards and towers. Storeys are stacked inside a big piece of furniture; a
+// missed landing drops you a floor (dangling from your crew) rather than resetting you.
+
+interface TowerStyle {
+  floor: string;
+  wall: string;
+  pad: string;
+  back: string;
+}
+
+const TOWER_STYLE: Record<BiomeId, TowerStyle> = {
+  kitchen: { floor: 'shelf', wall: 'cupboard', pad: 'toaster', back: 'pantryback' },
+  bedroom: { floor: 'shelf', wall: 'shelfwall', pad: 'spring', back: 'bookback' },
+  playground: { floor: 'wood', wall: 'bark', pad: 'trampoline', back: 'treeback' },
+};
+
+/** Storey height inside towers (enough headroom for a carried cake). */
+const STOREY = 2.9;
+/** Launch speed that clears one storey with about a metre to spare. */
+const LAUNCH = 13.2;
+
+const named = <T extends Piece>(name: string, fn: T): T => Object.defineProperty(fn, 'name', { value: name });
+
+function launchOver(biome: BiomeId): Piece {
+  const st = TOWER_STYLE[biome];
+  return named(`${biome[0]}Launch`, (b, d) => {
+    b.ground(0, 16);
+    b.pad(3.2, 0, 3.2, LAUNCH + 0.8, 7, st.pad, { x: 12.6, y: 0 });
+    const wallH = 2.05 + 0.15 * d;
+    b.block(9, 0, 0.9, wallH - 0.45, st.wall);
+    b.ball(9, wallH - 0.45, 0.9, st.wall, { friction: 0 }); // slippery round top: nobody gets stranded up there
+    b.wp(4.8, 0, 'pad');
+    b.wp(13.5, 0);
+    b.coin(9, 5.6);
+    b.deco('arrowsign', 2, 1.8, -1.2, 1, { text: 'JUMP ON!' });
+    return { w: 16, par: 18 };
+  });
+}
+
+function towerStairs(biome: BiomeId): Piece {
+  const st = TOWER_STYLE[biome];
+  return named(`${biome[0]}TStairs`, (b, d) => {
+    const W = 12;
+    const rise = d >= 2 ? 0.65 : 0.55;
+    const n = 5;
+    const run = 1.6;
+    b.ground(0, 1.2);
+    for (let i = 1; i <= n; i++) {
+      const x = 1.2 + (i - 1) * run;
+      const w = i === n ? W - x : run;
+      b.ground(x, w, rise * i, st.floor);
+      b.hint(x - 0.35, 'jump', rise * (i - 1));
+    }
+    b.box(0, rise * n + STOREY + 1.2, 5, 0.3, st.floor);
+    b.coin(2.5, rise * n + STOREY + 2);
+    b.deco(st.back, W / 2, 0, -1.6, 1, { s: W });
+    return { w: W, exitY: rise * n, par: 22 };
+  });
+}
+
+function towerSwitch(biome: BiomeId): Piece {
+  const st = TOWER_STYLE[biome];
+  return named(`${biome[0]}TSwitch`, (b, d) => {
+    const W = 16;
+    const H = STOREY;
+    const hole = 6.6; // much wider than the springboard: the diagonal flight clears the floor above
+    const padW = 3;
+    b.ground(0, W);
+    // outer walls: open at the bottom left (in) and the top right (out)
+    b.box(W - 0.4, 2 * H - 0.3, 0.4, 2 * H - 0.3, st.wall);
+    b.box(0, 2 * H + 2.6, 0.4, H + 2.9, st.wall);
+    // floor 1 → springboard (right) → floor 2 (going left) → springboard (left) → floor 3
+    b.pad(W - 0.4 - padW, 0, padW, LAUNCH, -5, st.pad, { x: W - hole - 2.3, y: H });
+    b.box(0.4, H, W - hole - 0.4 - 0.4, 0.3, st.floor);
+    b.pad(0.4, H, padW, LAUNCH, 5, st.pad, { x: hole + 2.6, y: 2 * H });
+    b.box(0.4 + hole, 2 * H, W - hole - 0.4, 0.3, st.floor);
+    if (d >= 1) b.block(5, H, 1.1, 0.5, st.wall);
+    if (d >= 2) b.block(W / 2 + 2, 2 * H, 1.1, 0.5, st.wall);
+    b.wp(W - 0.4 - padW / 2, 0, 'pad');
+    b.wp(W - 0.4 - padW / 2, H + 0.1);
+    b.wp(0.4 + padW / 2, H, 'pad');
+    b.wp(0.4 + padW / 2, 2 * H + 0.1);
+    if (d >= 1) b.hint(5 + 0.55 + 0.4, 'jump', H); // floor 2 is walked right-to-left
+    if (d >= 2) b.hint(W / 2 + 1.1, 'jump', 2 * H);
+    b.coin(W / 2, H + 1.4);
+    b.coin(W - 1.5, 2 * H + 1.4);
+    b.deco(st.back, W / 2, 0, -1.6, 1, { s: W });
+    return { w: W, exitY: 2 * H, par: 40 };
+  });
+}
+
+function towerLift(biome: BiomeId): Piece {
+  const st = TOWER_STYLE[biome];
+  return named(`${biome[0]}TLift`, (b, d) => {
+    const W = 12;
+    const up = 4.4;
+    const shaft = 3.4;
+    b.ground(0, W - shaft - 0.4);
+    b.ground(W - shaft - 0.4, shaft, -0.9, st.floor);
+    b.box(W - 0.4, up - 0.35, 0.4, up + 0.55, st.wall);
+    const mover = b.movers.length;
+    b.mover({
+      kind: 'lift',
+      w: shaft - 0.1,
+      h: 0.3,
+      mat: 'lift',
+      path: { type: 'line', ax: W - 0.4 - shaft / 2, ay: -0.15, bx: W - 0.4 - shaft / 2, by: up - 0.15, period: d >= 1 ? 8 : 9, profile: 'dwell' },
+    });
+    b.box(0, up + 0.1, 3.5, 0.3, st.floor);
+    b.coin(1.6, up + 1);
+    b.wp(W - 0.4 - shaft / 2, 0, 'lift', mover);
+    b.wp(W - 0.4 - shaft / 2, up + 0.1);
+    b.deco(st.back, W / 2, 0, -1.6, 1, { s: W });
+    b.deco('liftframe', W - 0.4 - shaft / 2, -0.9, -0.8, 1, { s: up + 1.5 });
+    return { w: W, exitY: up, par: 28 };
+  });
+}
+
+const TOWER_PIECES = new Set<Piece>();
+function towerSet(biome: BiomeId) {
+  const t = { stairs: towerStairs(biome), sw: towerSwitch(biome), lift: towerLift(biome), launch: launchOver(biome) };
+  [t.stairs, t.sw, t.lift].forEach((p) => TOWER_PIECES.add(p));
+  return t;
+}
+const KT = towerSet('kitchen');
+const BT = towerSet('bedroom');
+const PT = towerSet('playground');
+
+// ------------------------------------------------------------------------------------------------
 
 interface BiomeInfo {
   id: BiomeId;
@@ -575,11 +715,12 @@ export const BIOMES: Record<BiomeId, BiomeInfo> = {
     baseMat: 'counter',
     start: kStart,
     goal: kGoal,
-    pool: [kJars, kStove, kSink, kBooks, kCat, kSpoon, kCereal],
+    pool: [kJars, kStove, kSink, kBooks, kCat, kSpoon, kCereal, KT.launch],
     courses: [
-      { name: 'Cake Walk', d: 0, pieces: [kJars, kStove, kBooks, kSink, kCat] },
-      { name: 'Hot Stuff', d: 1, pieces: [kJars, kSpoon, kStove, kCereal, kSink, kBooks, kCat] },
-      { name: 'Kitchen Nightmare', d: 2, pieces: [kCereal, kCat, kStove, kSpoon, kSink, kBooks, kJars, kStove, kCat] },
+      { name: 'Cake Walk', d: 0, pieces: [kJars, kStove, KT.launch, kSink, kCat] },
+      { name: 'Hot Stuff', d: 1, pieces: [kJars, kSpoon, kStove, KT.launch, kCereal, kSink, kBooks, kCat] },
+      { name: 'Kitchen Nightmare', d: 2, pieces: [kCereal, kCat, kStove, KT.launch, kSpoon, kSink, kBooks, kJars, kStove, kCat] },
+      { name: 'Fridge Tower', d: 0, pieces: [KT.stairs, KT.sw, KT.lift, KT.sw, KT.stairs] },
     ],
   },
   bedroom: {
@@ -591,11 +732,12 @@ export const BIOMES: Record<BiomeId, BiomeInfo> = {
     baseMat: 'desk',
     start: bStart,
     goal: bGoal,
-    pool: [bBooks, bBlocks, bCar, bBed, bDog, bFan, bShelf],
+    pool: [bBooks, bBlocks, bCar, bBed, bDog, bFan, bShelf, BT.launch],
     courses: [
-      { name: 'Tank Top', d: 0, pieces: [bBooks, bBlocks, bCar, bBed, bDog, bShelf] },
-      { name: 'Sleeping Dogs', d: 1, pieces: [bCar, bBooks, bBlocks, bBed, bFan, bDog, bShelf] },
-      { name: 'Fish Out of Water', d: 2, pieces: [bBlocks, bCar, bBooks, bFan, bBed, bDog, bFan, bShelf, bBlocks] },
+      { name: 'Tank Top', d: 0, pieces: [bBooks, BT.launch, bCar, bBed, bDog, bShelf] },
+      { name: 'Sleeping Dogs', d: 1, pieces: [bCar, bBooks, bBlocks, BT.launch, bBed, bFan, bDog, bShelf] },
+      { name: 'Fish Out of Water', d: 2, pieces: [bBlocks, bCar, BT.launch, bBooks, bFan, bBed, bDog, bFan, bShelf, bBlocks] },
+      { name: 'Bookcase Summit', d: 1, pieces: [BT.stairs, BT.sw, BT.lift, BT.sw, BT.stairs] },
     ],
   },
   playground: {
@@ -607,11 +749,12 @@ export const BIOMES: Record<BiomeId, BiomeInfo> = {
     baseMat: 'grass',
     start: pStart,
     goal: pGoal,
-    pool: [pSand, pSlide, pSwings, pFootball, pFrame, pWind, pSeesaw],
+    pool: [pSand, pSlide, pSwings, pFootball, pFrame, pWind, pSeesaw, PT.launch],
     courses: [
-      { name: "Grandma's Vase", d: 0, pieces: [pSand, pSlide, pFootball, pSeesaw, pFrame] },
-      { name: 'Swing Low', d: 1, pieces: [pSand, pFootball, pSwings, pSlide, pWind, pFrame] },
-      { name: 'Recess Chaos', d: 2, pieces: [pWind, pSlide, pSwings, pFootball, pSeesaw, pFrame, pSand, pSwings] },
+      { name: "Grandma's Vase", d: 0, pieces: [pSand, pSlide, PT.launch, pSeesaw, pFrame] },
+      { name: 'Swing Low', d: 1, pieces: [pSand, pFootball, PT.launch, pSwings, pSlide, pWind, pFrame] },
+      { name: 'Recess Chaos', d: 2, pieces: [pWind, pSlide, pSwings, PT.launch, pFootball, pSeesaw, pFrame, pSand, pSwings] },
+      { name: 'Tree House', d: 1, pieces: [PT.stairs, PT.lift, PT.sw, PT.lift, PT.stairs] },
     ],
   },
 };
@@ -664,7 +807,7 @@ export function weeklySpec(date = new Date()): CourseSpec {
 
 /** Test helper: a course of [start, ...named pieces, goal] at a given difficulty. */
 export function buildTestCourse(biome: BiomeId, pieceNames: string[], d: number): CourseDef {
-  const pool = BIOMES[biome].pool;
+  const pool = [...BIOMES[biome].pool, ...TOWERS[biome]];
   const pieces = pieceNames.map((n) => {
     const p = pool.find((q) => q.name === n);
     if (!p) throw new Error('unknown piece ' + n);
@@ -674,8 +817,14 @@ export function buildTestCourse(biome: BiomeId, pieceNames: string[], d: number)
 }
 
 export function piecesOf(biome: BiomeId): string[] {
-  return BIOMES[biome].pool.map((p) => p.name);
+  return [...BIOMES[biome].pool, ...TOWERS[biome]].map((p) => p.name);
 }
+
+const TOWERS: Record<BiomeId, Piece[]> = {
+  kitchen: [KT.stairs, KT.sw, KT.lift],
+  bedroom: [BT.stairs, BT.sw, BT.lift],
+  playground: [PT.stairs, PT.sw, PT.lift],
+};
 
 export function buildCourse(spec: CourseSpec, override?: { pieces: Piece[]; d: number }): CourseDef {
   const biome = BIOMES[spec.biome];
@@ -708,8 +857,9 @@ export function buildCourse(spec: CourseSpec, override?: { pieces: Piece[]; d: n
   const all = [biome.start, ...pieces, biome.goal];
   const sections: CourseDef['sections'] = [];
   all.forEach((piece, i) => {
-    if (i > 0) checkpoints.push({ x: b.ox + 1.3, y: b.oy });
-    else checkpoints.push({ x: b.ox + 3.2, y: b.oy });
+    if (i > 0) checkpoints.push({ x: b.ox + 1.3, y: b.oy, wp: b.path.length });
+    else checkpoints.push({ x: b.ox + 3.2, y: b.oy, wp: 0 });
+    b.wp(i === 0 ? 3 : 0, 0);
     const out = piece(b, d, rng);
     sections.push({ name: piece.name, x0: b.ox, x1: b.ox + out.w });
     par += out.par;
@@ -717,6 +867,7 @@ export function buildCourse(spec: CourseSpec, override?: { pieces: Piece[]; d: n
     b.oy += out.exitY ?? 0;
   });
   const width = b.ox;
+  b.path.push({ x: b.goal.x, y: b.goal.y - b.goal.h / 2 });
 
   // Global floor: the abyss below counters and furniture is a soft landing that resets the crew.
   if (biome.id !== 'playground') {
@@ -726,8 +877,8 @@ export function buildCourse(spec: CourseSpec, override?: { pieces: Piece[]; d: n
     b.solids.push({ x: width / 2, y: biome.floorY - 0.5, w: width + 40, h: 1, mat: 'mud' });
   }
   // Walls at both ends so nobody wanders off the map.
-  b.solids.push({ x: -1, y: 10, w: 2, h: 40, mat: 'wall', tag: 'invisible' });
-  b.solids.push({ x: width + 1, y: 10, w: 2, h: 40, mat: 'wall', tag: 'invisible' });
+  b.solids.push({ x: -1, y: 40, w: 2, h: 120, mat: 'wall', tag: 'invisible' });
+  b.solids.push({ x: width + 1, y: 40, w: 2, h: 120, mat: 'wall', tag: 'invisible' });
 
   const cargo = twist.cargo ?? biome.cargo;
   return {
@@ -749,6 +900,8 @@ export function buildCourse(spec: CourseSpec, override?: { pieces: Piece[]; d: n
     hints: b.hints.sort((a, c) => a.x - c.x),
     decor: b.decor,
     killY: biome.floorY - 3,
+    path: b.path,
+    vertical: pieces.some((p) => TOWER_PIECES.has(p)),
     sections,
     bounds: { minX: 0, maxX: width, minY: biome.floorY - 1, maxY: b.maxTop + 8 },
     twist,

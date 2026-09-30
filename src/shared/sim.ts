@@ -70,6 +70,11 @@ export interface PlayerState {
   onCargo: boolean;
   lastUp: boolean;
   restT: number;
+  /** Tumble: purely an angle for the body (it's a ball to the physics). */
+  spin: number;
+  spinV: number;
+  preV: { x: number; y: number };
+  bounceCd: number;
 }
 
 interface Span {
@@ -135,6 +140,8 @@ export class Sim {
   layersLost = 0;
   deliverT = 0;
   lastFell = -1;
+  /** Where along the course route the cargo is (bots follow it). */
+  route = { i: 0, dir: 1, last: 1, done: false, stallT: 0 };
   firstCheckpointAt = -1;
   private events: GameEvent[] = [];
   private eventQueue = new RAPIER.EventQueue(true);
@@ -143,6 +150,13 @@ export class Sim {
   private cargoMass = 1;
   private fragile: number;
   private resetCd = 0;
+  private cargoBounceCd = 0;
+  cargoLaunchedAt = -10;
+  private strandedT = 0;
+  readonly padLoad: number[] = [];
+  private padVx = 0;
+  private padCd: number[] = [];
+  private padFire: boolean[] = [];
   private dmgAccum = 0;
 
   constructor(course: CourseDef, opts: SimOptions) {
@@ -249,6 +263,10 @@ export class Sim {
         onCargo: false,
         lastUp: false,
         restT: 0,
+        spin: 0,
+        spinV: 0,
+        preV: { x: 0, y: 0 },
+        bounceCd: 0,
       });
     });
 
@@ -334,6 +352,9 @@ export class Sim {
       p.killT = 0;
       p.flopT = 0;
       p.diveT = 0;
+      p.spin = 0;
+      p.spinV = 0;
+      p.bounceCd = 0;
       p.panicUsed = false;
       p.stamina = C.STAMINA_MAX;
       // Fresh plan, but keep the press counters in step with the sim.
@@ -341,6 +362,7 @@ export class Sim {
       p.brain = { ...newBotBrain(k), jumpN, diveN, seenHumanJump };
     });
     for (const s of this.spans) this.layRope(s);
+    this.route = { i: cp.wp ?? 0, dir: 1, last: 1, done: false, stallT: 0 };
     const cx = i === 0 ? this.course.cargoStart.x : cp.x + 1.6;
     const cy = i === 0 ? this.course.cargoStart.y : cp.y;
     this.cargo.forEach((part, k) => {
@@ -485,6 +507,10 @@ export class Sim {
       const v = part.body.linvel();
       part.prevV = { x: v.x, y: v.y };
     }
+    for (const p of this.players) {
+      const v = p.body.linvel();
+      p.preV = { x: v.x, y: v.y };
+    }
     this.world.step(this.eventQueue);
     this.cargoImpacts();
 
@@ -540,7 +566,8 @@ export class Sim {
       const accel = hanging ? 9 : p.grounded ? C.GROUND_ACCEL : C.AIR_ACCEL;
       let dv = target - v.x;
       if (!p.grounded && Math.abs(mx) < 0.2) dv = 0; // keep momentum in the air
-      if (!p.grounded && Math.sign(dv) === Math.sign(v.x) && Math.abs(v.x) > speed && Math.abs(mx) > 0.2) dv = 0;
+      // In the air, pushing the way you are already flying never slows you down (springboard flights).
+      if (!p.grounded && Math.sign(mx) === Math.sign(v.x) && Math.abs(v.x) > speed && Math.abs(mx) > 0.2) dv = 0;
       dv = Math.max(-accel * dt, Math.min(accel * dt, dv));
       b.applyImpulse({ x: dv * m, y: 0 }, true);
     }
@@ -575,6 +602,7 @@ export class Sim {
       b.applyImpulse({ x: p.facing * C.DIVE_IMPULSE_X * m, y: C.DIVE_IMPULSE_Y * m }, true);
       p.diveT = C.DIVE_TIME;
       p.diveCd = C.DIVE_COOLDOWN;
+      p.spinV = -p.facing * 14;
       this.events.push({ e: 'dive', p: i });
     }
 
@@ -761,6 +789,12 @@ export class Sim {
           else if (ph < 0.7) u = ease((ph - 0.58) / 0.12);
           else if (ph < 0.78) u = 1;
           else u = 1 - ease((ph - 0.78) / 0.22);
+        } else if (p.profile === 'dwell') {
+          // Lifts: wait at the bottom, ride up, wait at the top, come back down.
+          if (ph < 0.3) u = 0;
+          else if (ph < 0.5) u = ease((ph - 0.3) / 0.2);
+          else if (ph < 0.8) u = 1;
+          else u = 1 - ease((ph - 0.8) / 0.2);
         } else u = 0.5 - 0.5 * Math.cos(ph * Math.PI * 2);
         return { x: p.ax + (p.bx - p.ax) * u, y: p.ay + (p.by - p.ay) * u, a: 0 };
       }
@@ -799,7 +833,8 @@ export class Sim {
         if (Math.abs(t.x - m.x) < hw + C.PLAYER_R && Math.abs(t.y - m.y) < hh + C.PLAYER_R) {
           if (p.grab && p.grab.kind !== 'cargo') this.release(p, true);
           p.body.setLinvel({ x: dir * Math.abs(knock.x), y: knock.y }, true);
-          p.flopT = 0.7;
+          p.flopT = 0.8;
+          p.spinV = -dir * (14 + Math.random() * 8);
           m.hitCd[k] = 0.8;
           this.events.push({ e: 'ouch', p: k, kind: 'knock' });
         }
@@ -837,15 +872,103 @@ export class Sim {
     return Math.abs(x - z.x) <= z.w / 2 + pad && Math.abs(y - z.y) <= z.h / 2 + pad;
   }
 
+  /** Springboards: stand on one together for a moment and it fires everything on it. */
+  private loadPads(dt: number) {
+    const zones = this.course.zones;
+    zones.forEach((z, zi) => {
+      this.padFire[zi] = false;
+      if (z.kind !== 'launch' || z.period) return;
+      this.padCd[zi] = Math.max(0, (this.padCd[zi] ?? 0) - dt);
+      let on = 0;
+      let holders = 0;
+      let holdersOn = 0;
+      for (const p of this.players) {
+        const t = p.body.translation();
+        const inside = this.inZone(z, t.x, t.y, C.PLAYER_R * 0.6);
+        const around = Math.abs(t.x - z.x) < z.w / 2 + 1.2 && Math.abs(t.y - C.PLAYER_R - (z.y - z.h / 2)) < 0.6;
+        if (p.grab?.kind === 'cargo') {
+          holders++;
+          if (around) holdersOn++;
+        }
+        if (inside && p.grounded) on++;
+      }
+      const ct = this.cargoPos();
+      const cargoOn = this.inZone(z, ct.x, ct.y, 0.1);
+      if (on > 0 && this.padCd[zi] <= 0) this.padLoad[zi] = (this.padLoad[zi] ?? 0) + dt;
+      else this.padLoad[zi] = Math.max(0, (this.padLoad[zi] ?? 0) - dt * 2);
+      // Wait for the carriers to be on board (or give up waiting after a while).
+      const ready = holders === 0 ? true : cargoOn && holdersOn === holders;
+      if (this.padLoad[zi] > (ready ? 0.45 : 3)) {
+        this.padFire[zi] = true;
+        this.padLoad[zi] = 0;
+        this.padCd[zi] = 0.8;
+        this.events.push({ e: 'boing', x: z.x, y: z.y - z.h / 2 });
+      }
+    });
+  }
+
+  private launchPlayer(i: number, z: Zone) {
+    const p = this.players[i];
+    const v = p.body.linvel();
+    if (p.grab && p.grab.kind !== 'cargo') this.release(p, true);
+    const g = Math.sqrt(this.course.twist.gravity);
+    p.body.setLinvel({ x: z.period ? v.x * 0.7 + (z.fx ?? 0) : this.padVx, y: (z.fy ?? 12) * g }, true);
+    p.bounceCd = 0.5;
+    p.spinV = (Math.random() - 0.5) * 8;
+    p.coyote = 0;
+    p.grounded = false;
+    if (z.period) this.events.push({ e: 'boing', x: p.body.translation().x, y: p.body.translation().y - C.PLAYER_R });
+  }
+
   private applyZones(dt: number) {
     const zones = this.course.zones;
+    this.loadPads(dt);
+    // A firing springboard catapults the whole crew standing around it, not just whoever's on it.
+    zones.forEach((z, zi) => {
+      if (!this.padFire[zi]) return;
+      // Aimed springboards: everyone flies the same arc, so the crew lands on the floor above together.
+      const ref = this.inZone(z, this.cargoPos().x, this.cargoPos().y, 1) ? this.cargoPos().x : z.x;
+      this.padVx = z.fx ?? 0;
+      if (z.land) {
+        const g = -C.GRAVITY * this.course.twist.gravity;
+        const vy = (z.fy ?? 12) * Math.sqrt(this.course.twist.gravity);
+        const rise = z.land.y + 0.9 - (z.y - z.h / 2 + 0.8);
+        const T = (vy + Math.sqrt(Math.max(0, vy * vy - 2 * g * rise))) / g;
+        this.padVx = (z.land.x - ref) / Math.max(0.3, T);
+      }
+      this.players.forEach((p, i) => {
+        const t = p.body.translation();
+        const on = this.inZone(z, t.x, t.y, C.PLAYER_R * 0.6);
+        // Stragglers behind the springboard get catapulted too; anyone already ahead of it (under the
+        // floor we're flying up to) would only bonk their head, so the rope yanks them instead.
+        const ahead = (t.x - z.x) * Math.sign(z.fx || 1) > z.w / 2;
+        const near = !ahead && Math.abs(t.x - z.x) < z.w / 2 + 3 && Math.abs(t.y - C.PLAYER_R - (z.y - z.h / 2)) < 0.8;
+        if (on || near) this.launchPlayer(i, z);
+      });
+      // The cargo goes too (if it's on or next to the springboard).
+      const ct = this.cargoPos();
+      if (Math.abs(ct.x - z.x) < z.w / 2 + 1.2 && Math.abs(ct.y - z.y) < z.h / 2 + 0.8) {
+        const gg = Math.sqrt(this.course.twist.gravity);
+        for (const q of this.cargo) if (q.alive) q.body.setLinvel({ x: this.padVx, y: (z.fy ?? 12) * gg }, true);
+        this.cargoBounceCd = 0.5;
+        this.cargoLaunchedAt = this.t;
+      }
+      // ...and the rope with them, or it would drag everyone back down.
+      const g = Math.sqrt(this.course.twist.gravity);
+      for (const s of this.spans)
+        for (const seg of s.segs) {
+          const t = seg.translation();
+          if (Math.abs(t.x - z.x) < z.w / 2 + 4 && Math.abs(t.y - z.y) < 2.5) seg.setLinvel({ x: this.padVx, y: (z.fy ?? 12) * g * 0.9 }, true);
+        }
+    });
     for (let i = 0; i < this.players.length; i++) {
       const p = this.players[i];
       const t = p.body.translation();
       const m = p.body.mass();
       let inKill = false;
       let wet = false;
-      for (const z of zones) {
+      for (let zi = 0; zi < zones.length; zi++) {
+        const z = zones[zi];
         if (!this.inZone(z, t.x, t.y, C.PLAYER_R * 0.6)) continue;
         if (z.kind === 'kill') {
           inKill = true;
@@ -853,11 +976,15 @@ export class Sim {
         }
         if (!this.zoneActive(z)) continue;
         switch (z.kind) {
+          case 'launch':
+            if (z.period && p.bounceCd <= 0 && p.body.linvel().y < 1) this.launchPlayer(i, z);
+            break;
           case 'heat':
             if (p.hurtCd <= 0) {
               if (p.grab && p.grab.kind !== 'cargo') this.release(p, true);
               p.body.setLinvel({ x: p.body.linvel().x * 0.5 - p.facing * 1.5, y: 8 }, true);
               p.flopT = 0.45;
+              p.spinV = (Math.random() - 0.5) * 30;
               p.hurtCd = 0.6;
               this.events.push({ e: 'ouch', p: i, kind: 'heat' });
             }
@@ -905,7 +1032,16 @@ export class Sim {
           continue;
         }
         if (!this.zoneActive(z)) continue;
-        if (z.kind === 'heat') this.hurtCargo(16 * dt, t.x, t.y);
+        if (z.kind === 'launch') {
+          const v = part.body.linvel();
+          const fire = z.period ? v.y < 1 && this.cargoBounceCd <= 0 : false; // springboards launch the cargo when they fire (above)
+          if (fire && part === this.cargo[0]) {
+            const g = Math.sqrt(this.course.twist.gravity);
+            for (const q of this.cargo) if (q.alive) q.body.setLinvel({ x: z.period ? v.x * 0.7 + (z.fx ?? 0) : this.padVx, y: (z.fy ?? 12) * g }, true);
+            this.cargoBounceCd = 0.5;
+            this.cargoLaunchedAt = this.t;
+          }
+        } else if (z.kind === 'heat') this.hurtCargo(16 * dt, t.x, t.y);
         else if (z.kind === 'water') {
           part.body.applyImpulse({ x: 0, y: (z.fy ?? 0) * m * dt * 0.6 }, true);
           this.hurtCargo((this.course.cargo === 'fishtank' ? 3 : 9) * dt, t.x, t.y);
@@ -1039,7 +1175,9 @@ export class Sim {
       if (Math.hypot(part.prevV.x, part.prevV.y) < 1.4) return;
       const accel = ev.maxForceMagnitude() / part.body.mass();
       // Resting / carried contact stays well under the threshold; a 1 m drop onto the counter costs ~7%.
-      const amount = Math.min(25, Math.max(0, accel - 300) * (cargo.i === 0 ? 0.06 : 0.02));
+      let amount = Math.min(25, Math.max(0, accel - 300) * (cargo.i === 0 ? 0.06 : 0.02));
+      // Landing from a springboard ride is part of the course: it only dents a little.
+      if (this.t - this.cargoLaunchedAt < 2.5) amount *= 0.35;
       if (amount > 0.05) {
         const t = part.body.translation();
         if (DEBUG_DAMAGE) console.log(`impact a=${accel.toFixed(0)} dmg=${amount.toFixed(1)} vs ${other.kind} t=${this.t.toFixed(2)} holders=${this.holders()}`);
@@ -1067,7 +1205,7 @@ export class Sim {
     }
   }
 
-  private crewReset(reason: 'fell' | 'drop') {
+  private crewReset(reason: 'fell' | 'drop' | 'stuck') {
     if (this.resetCd > 0) return;
     this.resetCd = 0.5;
     if (reason === 'drop') this.hurtCargo(C.DROP_DAMAGE, this.cargoPos().x, this.cargoPos().y);
@@ -1077,6 +1215,7 @@ export class Sim {
 
   private afterStep(dt: number) {
     this.resetCd = Math.max(0, this.resetCd - dt);
+    this.cargoBounceCd = Math.max(0, this.cargoBounceCd - dt);
     // Ground detection for next step: three short rays under the body.
     const groundFilter = (col: RAPIER.Collider) => {
       const inf = this.info.get(col.handle);
@@ -1114,8 +1253,35 @@ export class Sim {
       if (!p.grounded) p.airVy = Math.min(p.airVy, v.y);
       if (p.grounded && !was) {
         if (p.airVy < -7) this.events.push({ e: 'land', p: i, v: -p.airVy });
+        // Belly flop: a big fall knocks you silly for a moment.
+        if (p.airVy < -12.5 && p.flopT <= 0) {
+          p.flopT = 0.6;
+          p.spinV = (p.facing || 1) * -9;
+          this.events.push({ e: 'tumble', p: i, kind: 'land' });
+        }
         p.airVy = 0;
+      } else if (p.flopT <= 0 && !(p.grab && p.grab.kind !== 'cargo')) {
+        // Yanked by the rope (or slammed by something): off your feet you go.
+        const dvx = v.x - p.preV.x;
+        const dvy = v.y - p.preV.y + -C.GRAVITY * this.course.twist.gravity * dt;
+        // Only a real yank knocks you over: a big sideways/upward jolt while you had your feet down.
+        if (was && Math.hypot(dvx, Math.max(0, dvy)) > 9.5 && this.t > 0.5 && this.resetCd <= 0 && p.bounceCd <= 0) {
+          p.flopT = 0.45;
+          p.spinV = -Math.sign(dvx || 1) * 16;
+          this.events.push({ e: 'tumble', p: i, kind: 'yank' });
+        }
       }
+      // Tumble angle: spin while flopped or diving, roll along the ground, then pop back upright.
+      if (p.flopT > 0 || p.diveT > 0) {
+        if (p.grounded && p.flopT > 0) p.spinV += (-v.x / C.PLAYER_R - p.spinV) * Math.min(1, dt * 8);
+        p.spin += p.spinV * dt;
+      } else {
+        const up = Math.round(p.spin / (Math.PI * 2)) * Math.PI * 2;
+        p.spin += (up - p.spin) * Math.min(1, dt * 12);
+        p.spinV = 0;
+        if (Math.abs(p.spin - up) < 0.01) p.spin = 0;
+      }
+      p.bounceCd = Math.max(0, p.bounceCd - dt);
       if (p.grounded) p.airVy = 0;
       // Anything this far out of the world is a fall.
       if (!Number.isFinite(t.x) || !Number.isFinite(t.y)) {
@@ -1141,6 +1307,22 @@ export class Sim {
     }
 
     if (this.status !== 'playing') return;
+
+    // Cargo stranded where nobody can reach it (say, on top of a wall)? Back to the checkpoint.
+    {
+      const c = this.cargoPos();
+      const cv = this.cargo[0].body.linvel();
+      const near = this.players.some((p) => {
+        const t = p.body.translation();
+        return Math.abs(t.x - c.x) < 1.6 && Math.abs(t.y - c.y) < 1.4;
+      });
+      this.strandedT = !near && this.holders() === 0 && Math.hypot(cv.x, cv.y) < 0.3 ? this.strandedT + dt : 0;
+      if (this.strandedT > 12) {
+        this.strandedT = 0;
+        this.crewReset('stuck');
+        return;
+      }
+    }
 
     // Checkpoints follow the cargo.
     const ct = this.cargoPos();
@@ -1196,6 +1378,7 @@ export class Sim {
         s: p.diveT > 0 ? 1 : p.flopT > 0 ? 2 : p.grab && !p.grounded ? 3 : 0,
         pu: p.panicUsed ? 1 : 0,
         c: p.grab?.kind === 'cargo' ? 1 : 0,
+        a: r2(p.spin % (Math.PI * 2)),
       };
       if (p.grab) {
         const bt = p.grab.body.translation();
@@ -1235,9 +1418,14 @@ export class Sim {
     this.course.zones.forEach((z, i) => {
       if (i < 31 && this.zoneActive(z)) zonesOn |= 1 << i;
     });
+    const pl: number[] = [];
+    this.course.zones.forEach((z, i) => {
+      if (z.kind === 'launch') pl.push(Math.round(Math.min(1, (this.padLoad[i] ?? 0) / 0.45) * 100) / 100);
+    });
     const events = this.events;
     this.events = [];
     return {
+      pl,
       t: r2(this.t),
       time: r2(this.time),
       status: this.status,

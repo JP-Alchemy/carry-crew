@@ -146,7 +146,9 @@ export type Sfx =
   | 'pop'
   | 'click'
   | 'star'
-  | 'meow';
+  | 'meow'
+  | 'boing'
+  | 'thud';
 
 export function sfx(name: Sfx, pan = 0) {
   switch (name) {
@@ -208,6 +210,14 @@ export function sfx(name: Sfx, pan = 0) {
       break;
     case 'click':
       tone('triangle', 1200, 900, 0.03, 0.08);
+      break;
+    case 'boing':
+      tone('sine', 120, 520, 0.35, 0.3);
+      tone('triangle', 240, 900, 0.3, 0.12, 0.02);
+      break;
+    case 'thud':
+      noise(0.15, 'lowpass', 250, 0.45);
+      tone('sine', 90, 50, 0.15, 0.25);
       break;
     case 'meow': {
       const c = ac();

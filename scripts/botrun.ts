@@ -24,9 +24,10 @@ for (const spec of specs) {
       if (e.e === 'reset') { resets++; if (e.reason === 'drop') drops++; }
       if (e.e === 'checkpoint') { cpTimes.push(Math.round(sim.time)); lastCpT = sim.time; }
     }
-    if (process.env.TRACE && k % 300 === 0) {
+    if (process.env.TRACE && k % Number(process.env.EVERY ?? 300) === 0 && sim.time >= Number(process.env.FROM ?? 0)) {
       const c = sim.cargoPos();
-      console.log(`  t=${sim.time.toFixed(0)} cp=${sim.cp} cargo=(${c.x.toFixed(1)},${c.y.toFixed(1)}) held=${sim.holders()} dmg=${sim.damage.toFixed(0)} players=${sim.players.map(p=>{const t=p.body.translation();return `${t.x.toFixed(1)},${t.y.toFixed(1)}${p.grab?p.grab.kind[0]:''}:${p.brain.mode}${p.grounded?'':'^'}`}).join(' ')}`);
+      const L = (x: number) => { const q = course.sections.find((z) => x >= z.x0 && x < z.x1); return q ? `${q.name.slice(0, 4)}${(x - q.x0).toFixed(1)}` : x.toFixed(1); };
+      console.log(`  t=${sim.time.toFixed(0)} cp=${sim.cp} r${sim.route.i}/${sim.route.dir} cargo=(${L(c.x)},${c.y.toFixed(1)}) held=${sim.holders()} dmg=${sim.damage.toFixed(0)} players=${sim.players.map(p=>{const t=p.body.translation();return `${L(t.x)},${t.y.toFixed(1)}${p.grab?p.grab.kind[0]:''}:${p.brain.mode}${p.grounded?'':'^'}`}).join(' ')}`);
     }
     if (sim.time - lastCpT > 150) break;
   }

@@ -171,7 +171,7 @@ export class GameRenderer {
           this.particles.emit(e.x, e.y, 4, 0xffffff, { speed: 1.5, up: 0.5, size: 0.08, life: 0.25 });
           break;
         case 'panic':
-          if (P(e.p)) this.float(P(e.p).x, P(e.p).y + 0.9, 'PANIC GRAB!', 'big', '#ffd23b');
+          if (P(e.p)) this.float(P(e.p).x, P(e.p).y + 0.9, 'PANIC GRAB!', 'huge', '#ffd23b');
           break;
         case 'ouch': {
           const p = P(e.p);
@@ -192,11 +192,11 @@ export class GameRenderer {
           this.particles.emit(e.x, e.y + 0.3, 24, this.crumbColors(), { speed: 4, up: 3, size: 0.16, life: 1.2 });
           break;
         case 'checkpoint':
-          this.float(e.x, e.y + 2.4, 'CHECKPOINT!', 'big', '#3ddc84');
+          this.float(e.x, e.y + 2.4, 'CHECKPOINT!', 'huge', '#3ddc84');
           this.particles.emit(e.x, e.y + 1.8, 30, [0x3ddc84, 0xffd23b, 0xffffff], { speed: 4, up: 3, size: 0.14, life: 1 });
           break;
         case 'drop':
-          this.float(e.x, e.y + 2, 'DROPPED IT!', 'big', '#ff4d4d');
+          this.float(e.x, e.y + 2, 'DROPPED IT!', 'huge', '#ff4d4d');
           this.shake = 0.6;
           break;
         case 'fell':
@@ -209,6 +209,18 @@ export class GameRenderer {
         case 'delivered': {
           const c = this.course!.goal;
           for (let k = 0; k < 6; k++) this.particles.emit(c.x + (k - 3), c.y + 2, 25, [0xff5a7a, 0xffd93b, 0x4dc3ff, 0x7bd389, 0xab47bc], { speed: 6, up: 6, size: 0.14, life: 2, gravity: -6 });
+          break;
+        }
+        case 'boing':
+          this.particles.emit(e.x, e.y + 0.2, 18, [0xffffff, 0xffe066, 0xff8fa3], { speed: 4, up: 2, size: 0.13, life: 0.6 });
+          this.float(e.x, e.y + 1.5, 'BOING!', 'huge', '#ffe066');
+          this.shake = Math.max(this.shake, 0.25);
+          break;
+        case 'tumble': {
+          const p = P(e.p);
+          if (!p) break;
+          this.particles.emit(p.x, p.y - 0.3, 10, 0xd8cfc0, { speed: 3, up: 1, size: 0.15, life: 0.5 });
+          if (Math.random() < 0.6) this.bubble(e.p, e.kind === 'yank' ? ['Whoa!', 'Hey!', 'Not so fast!', 'Waaah!'][Math.floor(Math.random() * 4)] : ['Oof!', 'Ow!', 'Splat!'][Math.floor(Math.random() * 3)], 'ouch');
           break;
         }
         case 'kick':
@@ -440,7 +452,7 @@ export class GameRenderer {
       if (!m) continue;
       const x = Number(m[1]) * scale;
       const y = Number(m[2]) * scale;
-      g.font = `bold ${Math.round((l.kind.includes('big') ? 26 : 16) * scale)}px system-ui, sans-serif`;
+      g.font = `bold ${Math.round((l.kind.includes('huge') ? 26 : 16) * scale)}px system-ui, sans-serif`;
       if (l.kind.startsWith('bubble')) {
         const w = g.measureText(l.text).width + 16 * scale;
         g.fillStyle = '#fff';

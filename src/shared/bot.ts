@@ -20,11 +20,12 @@ export interface BotBrain {
   slot: number; // -1 left carrier, 1 right carrier, 0 none
   blockT: number;
   lowT: number;
+  padUntil: number;
   mode: string; // for debugging
 }
 
 export function newBotBrain(i: number): BotBrain {
-  return { jumpN: 0, diveN: 0, jumpCd: 0.3 + i * 0.05, stuckT: 0, lastX: 0, climbT: 0, seenHumanJump: 0, slot: 0, mode: '', blockT: 0, lowT: 0 };
+  return { jumpN: 0, diveN: 0, jumpCd: 0.3 + i * 0.05, stuckT: 0, lastX: 0, climbT: 0, seenHumanJump: 0, slot: 0, mode: '', blockT: 0, lowT: 0, padUntil: 0 };
 }
 
 const SOLID_GROUPS = C.groups(C.G_PLAYER, C.G_TERRAIN | C.G_PROP);
@@ -37,8 +38,85 @@ function rayHit(sim: Sim, x: number, y: number, dx: number, dy: number, len: num
   return hit ? hit.timeOfImpact : -1;
 }
 
+/** Is the cargo resting on / carried over the surface at height y? */
+function onLevel(cargoY: number, surfaceY: number) {
+  return cargoY - surfaceY > -0.3 && cargoY - surfaceY < 1.7;
+}
+
+/**
+ * Follow the course route: which way should the crew carry the cargo right now? Handles switchbacks,
+ * springboards (wait on it until it fires) and lifts (board it only while it's down).
+ */
+export function updateRoute(sim: Sim) {
+  const path = sim.course.path;
+  const r = sim.route;
+  const main = sim.cargo[0];
+  const ct = main.body.translation();
+  const cv = main.body.linvel();
+  // Dropped down a storey? Walk the route back.
+  while (r.i > 0 && ct.y < path[r.i].y - 1.6 && cv.y > -1) r.i--;
+  // Bounced but fell back onto the springboard's floor: try the springboard again.
+  {
+    const a = path[r.i];
+    const t = path[r.i + 1];
+    if (t && r.i > 0 && path[r.i].kind === 'pad' && t.y - a.y > 1 && onLevel(ct.y, a.y) && Math.abs(cv.y) < 0.5 && sim.t - sim.cargoLaunchedAt > 1.2) r.i--;
+    // Came up short after a springboard (stuck against what we meant to fly over)? Go back and bounce again.
+    r.stallT = Math.hypot(cv.x, cv.y) < 0.4 && sim.holders() > 0 ? r.stallT + 1 / 60 : 0;
+    if (r.stallT > 3 && path[r.i].kind === 'pad' && r.i > 0 && sim.t - sim.cargoLaunchedAt > 2) {
+      r.i--;
+      r.stallT = 0;
+    }
+  }
+  for (let guard = 0; guard < 4 && r.i < path.length - 1; guard++) {
+    const a = path[r.i];
+    const t = path[r.i + 1];
+    const vertical = Math.abs(t.x - a.x) < 0.6 && t.y - a.y > 1;
+    let reached: boolean;
+    if (t.kind === 'pad') reached = Math.abs(t.x - ct.x) < 2 && sim.t - sim.cargoLaunchedAt < 0.6;
+    else if (t.kind === 'lift') reached = Math.abs(t.x - ct.x) < 0.9 && onLevel(ct.y, t.y);
+    else if (vertical) reached = ct.y > t.y + 0.2;
+    else reached = (ct.x - t.x) * (Math.sign(t.x - a.x) || 1) > -0.4 && onLevel(ct.y, t.y);
+    if (!reached) break;
+    r.i++;
+  }
+  const a = path[r.i];
+  const t = path[r.i + 1];
+  r.done = r.i >= path.length - 2;
+  if (!t) {
+    r.dir = 0;
+    return;
+  }
+  const sgn = (v: number) => (Math.abs(v) < 0.3 ? 0 : Math.sign(v));
+  let dir: number;
+  if (t.kind === 'pad') dir = sgn(t.x - ct.x);
+  else if (t.kind === 'lift' && t.mover !== undefined) {
+    const m = sim.movers[t.mover];
+    const top = (tt: number) => sim.moverPose(m.def, tt).y + m.def.h / 2;
+    const down = Math.abs(top(sim.t) - t.y) < 0.12 && Math.abs(top(sim.t + 1.6) - t.y) < 0.12;
+    const dx = t.x - ct.x;
+    if (Math.abs(dx) < 0.9) dir = sgn(dx);
+    else if (down) dir = Math.sign(dx);
+    else {
+      // Wait at the edge of the shaft for the lift to come down.
+      const edge = t.x - Math.sign(dx) * (m.def.w / 2);
+      const front = ct.x + Math.sign(dx) * (main.w / 2 + 1.2);
+      dir = (edge - front) * Math.sign(dx) > 0.3 ? Math.sign(dx) : 0;
+    }
+  } else if (Math.abs(t.x - a.x) < 0.6 && t.y - a.y > 1) {
+    // Going up (riding a lift / flying off a springboard): steer toward what comes after.
+    if (a.kind === 'lift' && ct.y < t.y - 0.3) dir = sgn(a.x - ct.x);
+    else {
+      const n = path[r.i + 2];
+      dir = n ? Math.sign(n.x - ct.x) || r.last : 0;
+    }
+  } else dir = Math.sign(t.x - ct.x) || r.last;
+  r.dir = dir;
+  if (dir) r.last = dir;
+}
+
 /** Decide who carries: the bots nearest the cargo, one per side. */
 export function planCrew(sim: Sim) {
+  updateRoute(sim);
   const ps = sim.players;
   const ct = sim.cargoPos();
   const want = Math.min(ps.length, 2);
@@ -136,6 +214,8 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
   const goal = sim.course.goal;
   const edge = cw / 2 + C.PLAYER_R;
 
+  // Just bounced off a springboard: fly straight up through the hole before steering.
+  const rising = p.bounceCd > 0 && vel.y > 2;
   if (sim.status === 'delivered') {
     if (p.grounded && Math.random() < 0.02) jump();
     return inp;
@@ -173,8 +253,9 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
   const n = sim.players.length;
   const want = Math.min(n, 2);
   const holders = sim.holders();
-  const dir = Math.sign(goal.x - ct.x) || 1;
-  const nearGoal = Math.abs(goal.x - ct.x) < 0.35;
+  const dir = sim.route.dir || sim.route.last;
+  const nearGoal = sim.route.done && Math.abs(goal.x - ct.x) < 0.35;
+  const hintOk = (h: { y?: number }) => h.y === undefined || Math.abs(h.y - (pos.y - C.PLAYER_R)) < 1.2;
 
   const ping = br.ping && sim.t - br.ping.t < 3.5 ? br.ping : undefined;
   if (ping?.kind === 'jump' && sim.t - ping.t < 0.25) jump();
@@ -196,7 +277,7 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
         jump();
       }
     } else {
-      mx = nearGoal ? 0 : dir;
+      mx = nearGoal ? 0 : sim.route.dir;
       if (holders < want) mx = 0; // wait for the other carrier
       const lo = Math.min(ct.x - cw / 2, pos.x) - 0.5;
       const hi = Math.max(ct.x + cw / 2, pos.x) + 0.5;
@@ -206,6 +287,7 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
       const lead = (dir > 0 ? ct.x + cw / 2 + C.PLAYER_R * 2 : ct.x - cw / 2 - C.PLAYER_R * 2) + dir * 0.2;
       for (const h of sim.course.hints) {
         if (mx === 0) break;
+        if (!hintOk(h)) continue;
         if (h.a === 'jump') {
           const d = (h.x - lead) * dir;
           if (d > -0.15 && d < 0.3) {
@@ -245,8 +327,8 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
     }
     // Cargo hanging off a ledge below us: pull it back up.
     if (ct.y < pos.y - 1.2 && p.grounded) mx = -Math.sign(ct.x - pos.x);
-    inp.mx = mx;
-    stuckCheck(sim, i, inp, mx, jump, dt);
+    inp.mx = rising ? 0 : mx;
+    stuckCheck(sim, i, inp, inp.mx, jump, dt);
     return inp;
   }
 
@@ -272,9 +354,10 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
     const tx = ct.x + side * (edge + 0.05);
     const dx = tx - pos.x;
     const dy = ct.y - pos.y;
-    if (Math.abs(dx) < 0.3 && Math.abs(dy) < 1.1) {
+    // Within reach (we pass through the cargo, so any spot near it will do): take hold.
+    if ((Math.abs(dx) < 0.3 || Math.abs(pos.x - ct.x) < edge - 0.1 || br.stuckT > 0.8) && Math.abs(pos.x - ct.x) < edge + 0.25 && Math.abs(dy) < 1.1) {
       inp.grab = true;
-      inp.mx = -side * 0.25; // face the cargo
+      inp.mx = Math.sign(ct.x - pos.x) * 0.25; // face the cargo
       return inp;
     }
     inp.mx = Math.max(-1, Math.min(1, dx * 1.5));
@@ -293,8 +376,9 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
   } else if (carriers.length) {
     const lo = Math.min(...carriers);
     const hi = Math.max(...carriers);
-    if (i < lo) tx = ct.x - edge - 1.3 - (lo - i - 1) * 1.1;
-    else if (i > hi) tx = ct.x + edge + 1.3 + (i - hi - 1) * 1.1;
+    const back = sim.route.last;
+    if (i < lo) tx = ct.x - back * (edge + 1.3 + (lo - i - 1) * 1.1);
+    else if (i > hi) tx = ct.x + back * (edge + 1.3 + (i - hi - 1) * 1.1);
     else tx = ct.x + (i - (lo + hi) / 2) * 0.5;
   } else {
     tx = ct.x - dir * (edge + 1.3 + i * 1.0);
@@ -311,10 +395,10 @@ export function botInput(sim: Sim, i: number, dt: number): PlayerInput {
   let mx = Math.abs(dx) < 0.4 ? 0 : Math.max(-1, Math.min(1, dx));
   if (pingWait) mx = 0;
   if (mx !== 0 && dangerAhead(sim, pos.x - 0.5, pos.x + 0.5, pos.y, Math.sign(mx), C.MOVE_SPEED)) mx = 0;
-  inp.mx = mx;
-  if (mx !== 0) navigate(sim, i, inp, jump, pos, Math.sign(mx), Math.abs(dx) > 2.2);
-  // Dangling below the crew? Grab the rope and climb.
-  if (!p.grounded && pos.y < ct.y - 2.2 && vel.y < 0.5) inp.grab = true;
+  inp.mx = rising ? 0 : mx;
+  if (inp.mx !== 0) navigate(sim, i, inp, jump, pos, Math.sign(mx), Math.abs(dx) > 2.2);
+  // Dangling below the crew (hanging off a ledge by the rope)? Grab hold and climb.
+  if (!p.grounded && pos.y < ct.y - 1.3 && Math.abs(vel.y) < 2.5 && p.restT <= 0.2) inp.grab = true;
   stuckCheck(sim, i, inp, mx, jump, dt);
   return inp;
 }
@@ -324,6 +408,7 @@ function navigate(sim: Sim, i: number, inp: PlayerInput, jump: () => void, pos: 
   if (!p.grounded) return;
   for (const h of sim.course.hints) {
     if (h.a === 'wait') continue;
+    if (h.y !== undefined && Math.abs(h.y - (pos.y - C.PLAYER_R)) > 1.2) continue;
     const d = (h.x - pos.x) * dir;
     if (d > 0 && d < 0.55) {
       jump();
@@ -350,6 +435,22 @@ function stuckCheck(sim: Sim, i: number, inp: PlayerInput, mx: number, jump: () 
   if (Math.abs(mx) > 0.3 && Math.abs(x - br.lastX) < 0.02) br.stuckT += dt;
   else br.stuckT = Math.max(0, br.stuckT - dt * 2);
   br.lastX = x;
+  // Walled in? Use a springboard nearby on this level.
+  if (br.stuckT > 1.8 && p.grab?.kind !== 'cargo') {
+    const t = p.body.translation();
+    const pad = sim.course.zones.find((z) => z.kind === 'launch' && !z.period && Math.abs(z.x - t.x) < 7 && Math.abs(z.y - z.h / 2 - (t.y - C.PLAYER_R)) < 0.6);
+    if (pad) br.padUntil = sim.t + 4;
+  }
+  if (sim.t < br.padUntil) {
+    const t = p.body.translation();
+    const pad = sim.course.zones.find((z) => z.kind === 'launch' && !z.period && Math.abs(z.x - t.x) < 8 && Math.abs(z.y - z.h / 2 - (t.y - C.PLAYER_R)) < 0.8);
+    if (pad) {
+      inp.mx = Math.abs(pad.x - t.x) > 0.4 ? Math.sign(pad.x - t.x) : 0;
+      inp.grab = false;
+      br.stuckT = 0;
+      return;
+    }
+  }
   if (br.stuckT > 1.0) {
     if (p.grounded || p.restT > 0.2) jump();
     else if (p.grab?.kind !== 'cargo') {

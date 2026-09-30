@@ -85,25 +85,94 @@ function bodyGeometry(shape: number) {
   }
 }
 
+/**
+ * A two-segment floppy limb (upper + lower, e.g. shoulder → elbow → hand), simulated with verlet
+ * in world space. It trails, swings and flails on its own; a gripping hand is pinned in place.
+ */
+class Limb {
+  readonly pts = [new THREE.Vector2(), new THREE.Vector2()];
+  private prev = [new THREE.Vector2(), new THREE.Vector2()];
+  private ready = false;
+  constructor(
+    readonly l1: number,
+    readonly l2: number,
+  ) {}
+
+  reset(anchor: THREE.Vector2, dir: THREE.Vector2) {
+    this.pts[0].copy(anchor).addScaledVector(dir, this.l1);
+    this.pts[1].copy(this.pts[0]).addScaledVector(dir, this.l2);
+    this.prev[0].copy(this.pts[0]);
+    this.prev[1].copy(this.pts[1]);
+    this.ready = true;
+  }
+
+  update(dt: number, anchor: THREE.Vector2, opts: { gravity: number; pin?: THREE.Vector2; pull?: THREE.Vector2; pullK?: number; kick?: THREE.Vector2 }) {
+    if (!this.ready || this.pts[1].distanceTo(anchor) > 4) this.reset(anchor, new THREE.Vector2(0, -1));
+    const h = Math.min(dt, 1 / 30);
+    for (let k = 0; k < 2; k++) {
+      const p = this.pts[k];
+      const v = p.clone().sub(this.prev[k]).multiplyScalar(0.9);
+      this.prev[k].copy(p);
+      v.y -= opts.gravity * h * h;
+      if (k === 1 && opts.pull) v.addScaledVector(opts.pull.clone().sub(p), (opts.pullK ?? 0.2) * Math.min(1, h * 60));
+      if (k === 1 && opts.kick) v.addScaledVector(opts.kick, h);
+      p.add(v);
+    }
+    if (opts.pin) this.pts[1].copy(opts.pin);
+    for (let it = 0; it < 4; it++) {
+      // anchor ↔ joint
+      const d0 = this.pts[0].clone().sub(anchor);
+      const len0 = d0.length() || 1e-4;
+      this.pts[0].copy(anchor).addScaledVector(d0, this.l1 / len0);
+      // joint ↔ end (a pinned hand may stretch the arm a little: rubbery toys)
+      const d1 = this.pts[1].clone().sub(this.pts[0]);
+      const len1 = d1.length() || 1e-4;
+      const target = opts.pin ? Math.min(len1, this.l2 * 2.2) : this.l2;
+      const corr = d1.multiplyScalar((len1 - target) / len1);
+      if (opts.pin) this.pts[0].add(corr);
+      else {
+        this.pts[0].addScaledVector(corr, 0.3);
+        this.pts[1].addScaledVector(corr, -0.7);
+      }
+    }
+  }
+}
+
+function segment(m: THREE.Object3D, a: THREE.Vector2, b: THREE.Vector2, ox: number, oy: number, z: number) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  m.position.set(a.x - ox, a.y - oy, z);
+  m.scale.set(1, Math.max(0.02, Math.hypot(dx, dy)), 1);
+  m.rotation.set(0, 0, Math.atan2(-dx, dy));
+}
+
 export class CharacterView {
   readonly group = new THREE.Group();
   private tilt = new THREE.Group();
+  private face = new THREE.Group();
   private body!: THREE.Mesh;
   private hat!: THREE.Object3D;
   private hatSpin?: THREE.Object3D;
   private eyes = new THREE.Group();
   private pupils: THREE.Mesh[] = [];
-  private feet: THREE.Mesh[] = [];
-  private arms: THREE.Mesh[] = [];
+  private limbMeshes: THREE.Object3D[] = [];
+  private arms = [new Limb(0.19, 0.2), new Limb(0.19, 0.2)];
+  private legs = [new Limb(0.15, 0.16), new Limb(0.15, 0.16)];
   private phase = Math.random() * 10;
   private squash = 0;
   private lastVy = 0;
+  private lastVx = 0;
   private blink = 0;
   private emoteT = 0;
   private emote = '';
   private z = 0;
+  private dizzy?: THREE.Group;
+  // jelly wobble (a spring on the body driven by acceleration)
+  private wob = new THREE.Vector2();
+  private wobV = new THREE.Vector2();
   look: Look;
-  mood: 'normal' | 'happy' | 'scared' = 'normal';
+  /** Small depth offset per crew member so overlapping players don't z-fight. */
+  lane = 0;
 
   constructor(look: Look) {
     this.look = look;
@@ -113,14 +182,17 @@ export class CharacterView {
 
   private build() {
     disposeTree(this.tilt);
-    this.arms.forEach((a) => disposeTree(a));
+    this.limbMeshes.forEach((m) => {
+      disposeTree(m);
+      this.group.remove(m);
+    });
     this.tilt.clear();
-    this.arms.forEach((a) => this.group.remove(a));
+    this.face = new THREE.Group();
     const col = BODY_COLORS[this.look.body] ?? BODY_COLORS[0];
     this.body = new THREE.Mesh(bodyGeometry(this.look.shape), toon(col));
     this.body.castShadow = true;
     if (this.look.shape === 3) this.body.position.y = 0.1;
-    this.tilt.add(this.body);
+    this.tilt.add(this.body, this.face);
     // Face
     this.eyes = new THREE.Group();
     this.pupils = [];
@@ -133,28 +205,43 @@ export class CharacterView {
     this.eyes.add(mesh(SPHERE(), toon(0xff8f8f, { opacity: 0.6 }), -0.2, -0.04, R * 0.78, 0.06, 0.04, 0.02));
     this.eyes.add(mesh(SPHERE(), toon(0xff8f8f, { opacity: 0.6 }), 0.2, -0.04, R * 0.78, 0.06, 0.04, 0.02));
     if (this.look.shape === 3) this.eyes.position.y = 0.18;
-    this.tilt.add(this.eyes);
-    // Feet
-    this.feet = [-0.13, 0.13].map((x) => {
-      const f = mesh(SPHERE(), toon(0x3b3b3b), x, -R * 0.95, 0.04, 0.1, 0.07, 0.14);
-      this.tilt.add(f);
-      return f;
-    });
-    // Arms: unit cylinders we stretch between shoulder and hand
-    const armGeo = geo('arm', () => new THREE.CylinderGeometry(0.045, 0.045, 1, 6).translate(0, 0.5, 0));
-    const handGeo = geo('hand', () => new THREE.SphereGeometry(0.075, 8, 6).translate(0, 1, 0));
-    this.arms = [0, 1].map(() => {
-      const a = new THREE.Mesh(armGeo, toon(col));
-      const hand = new THREE.Mesh(handGeo, toon(0xffffff));
-      a.add(hand);
-      hand.name = 'hand';
-      this.group.add(a);
-      return a;
-    });
+    this.face.add(this.eyes);
     this.hat = buildHat(this.look.hat);
     this.hat.position.y = this.look.shape === 3 ? R + 0.3 : this.look.shape === 2 ? R * 0.88 : R + 0.02;
     this.hatSpin = this.hat.getObjectByName('spin') ?? undefined;
-    this.tilt.add(this.hat);
+    this.face.add(this.hat);
+    // Dizzy stars (shown while knocked silly)
+    this.dizzy = new THREE.Group();
+    for (let k = 0; k < 3; k++) {
+      const st = mesh(SPHERE(), toonUnique(0xffe066, { emissive: 0x886600 }), Math.cos((k * Math.PI * 2) / 3) * 0.3, 0, Math.sin((k * Math.PI * 2) / 3) * 0.3, 0.06, 0.06, 0.06);
+      this.dizzy.add(st);
+    }
+    this.dizzy.position.y = R + 0.35;
+    this.dizzy.visible = false;
+    this.tilt.add(this.dizzy);
+    // Limbs: upper + lower cylinders and a hand/foot, placed from the verlet points every frame.
+    const segGeo = geo('limbseg', () => new THREE.CylinderGeometry(0.045, 0.04, 1, 6).translate(0, 0.5, 0));
+    const legGeo = geo('legseg', () => new THREE.CylinderGeometry(0.05, 0.045, 1, 6).translate(0, 0.5, 0));
+    const handGeo = geo('handball', () => new THREE.SphereGeometry(0.075, 8, 6));
+    const footGeo = geo('football', () => new THREE.SphereGeometry(1, 8, 6));
+    this.limbMeshes = [];
+    for (let k = 0; k < 2; k++) {
+      const up = new THREE.Mesh(segGeo, toon(col));
+      const lo = new THREE.Mesh(segGeo, toon(col));
+      const hand = new THREE.Mesh(handGeo, toon(0xffffff));
+      this.limbMeshes.push(up, lo, hand);
+    }
+    for (let k = 0; k < 2; k++) {
+      const up = new THREE.Mesh(legGeo, toon(0x3b3b3b));
+      const lo = new THREE.Mesh(legGeo, toon(0x3b3b3b));
+      const foot = new THREE.Mesh(footGeo, toon(0x2b2b2b));
+      foot.scale.set(0.1, 0.07, 0.13);
+      this.limbMeshes.push(up, lo, foot);
+    }
+    this.limbMeshes.forEach((m) => {
+      m.castShadow = true;
+      this.group.add(m);
+    });
   }
 
   setLook(look: Look) {
@@ -168,87 +255,127 @@ export class CharacterView {
     this.emoteT = 1.2;
   }
 
-  /** Small depth offset per crew member so overlapping players don't z-fight. */
-  lane = 0;
-
   update(s: PlayerSnap, dt: number, t: number, cargoX?: number) {
     // Players pass through the cargo and each other: step toward the camera when overlapping.
     const front = s.c || (cargoX !== undefined && Math.abs(s.x - cargoX) < 1.1);
     this.z += ((front ? 0.6 : this.lane) - this.z) * Math.min(1, dt * 10);
     this.group.position.set(s.x, s.y, this.z);
+    const h = Math.max(1e-3, dt);
     const speed = Math.abs(s.vx);
     this.phase += dt * (s.g ? speed * 3.2 : 1.5);
-    // squash & stretch
-    if (s.g && this.lastVy < -6) this.squash = Math.min(0.35, -this.lastVy * 0.03);
+    const ax = (s.vx - this.lastVx) / h;
+    const ay = (s.vy - this.lastVy) / h;
+    // squash on landing
+    if (s.g && this.lastVy < -6) this.squash = Math.min(0.4, -this.lastVy * 0.035);
+    this.lastVx = s.vx;
     this.lastVy = s.vy;
     this.squash *= Math.pow(0.001, dt);
-    const stretch = s.g ? 0 : Math.max(-0.12, Math.min(0.18, s.vy * 0.02));
+    // jelly wobble: sloshes against sudden acceleration (yanks, landings, launches)
+    const acc = new THREE.Vector2(Math.max(-80, Math.min(80, ax)), Math.max(-80, Math.min(80, ay)));
+    this.wobV.addScaledVector(this.wob, -180 * dt).addScaledVector(this.wobV, -7 * dt).addScaledVector(acc, -0.004);
+    this.wob.addScaledVector(this.wobV, dt);
+    this.wob.clampLength(0, 0.35);
+    const stretch = s.g ? 0 : Math.max(-0.12, Math.min(0.2, s.vy * 0.02));
     const bob = s.g ? Math.abs(Math.sin(this.phase)) * Math.min(1, speed / 3) * 0.05 : 0;
-    this.tilt.scale.set(1 + this.squash * 0.6 - stretch * 0.4, 1 - this.squash + stretch, 1 + this.squash * 0.6 - stretch * 0.4);
+    const sq = this.squash + this.wob.y * 0.6;
+    this.tilt.scale.set(1 + sq * 0.6 - stretch * 0.4 + Math.abs(this.wob.x) * 0.3, 1 - sq + stretch, 1 + sq * 0.6 - stretch * 0.4);
     this.tilt.position.y = bob - this.squash * R * 0.5;
-    // lean, flop and dive
-    let rot = -s.vx * 0.04;
-    if (s.s === 1) rot = -s.f * 1.3;
-    else if (s.s === 2) rot = Math.sin(t * 18) * 0.6 + s.f * 0.4;
-    else if (s.s === 3) rot = Math.sin(t * 3) * 0.08;
-    this.tilt.rotation.z += (rot - this.tilt.rotation.z) * Math.min(1, dt * 12);
-    // Face toward movement but keep the face visible to the camera.
+    // Tumble (from the sim), lean into running, wobble
+    let rot = (s.a ?? 0) - s.vx * 0.045 + this.wob.x * 1.2;
+    if (s.s === 1) rot = (s.a ?? 0) - s.f * 0.3;
+    else if (s.s === 3) rot = Math.sin(t * 3) * 0.1;
+    this.tilt.rotation.z = rot;
+    // The face (eyes + hat) lags behind the body like a bobble head.
+    this.face.position.set(this.wob.x * 0.4, this.wob.y * 0.25, 0);
     const yaw = s.f * 0.55;
-    this.tilt.rotation.y += (yaw - this.tilt.rotation.y) * Math.min(1, dt * 10);
+    this.face.rotation.y += (yaw - this.face.rotation.y) * Math.min(1, dt * 10);
+    this.body.rotation.y = this.face.rotation.y;
     // emotes
     if (this.emoteT > 0) {
       this.emoteT -= dt;
-      if (this.emote === 'facepalm') this.tilt.rotation.x = 0.4;
+      if (this.emote === 'facepalm') this.face.rotation.x = 0.4;
       else if (this.emote === 'cheer') this.tilt.position.y += Math.abs(Math.sin(this.emoteT * 12)) * 0.15;
-    } else this.tilt.rotation.x *= 0.9;
-    // eyes: look where you're going, blink sometimes, scared eyes when falling
+    } else this.face.rotation.x *= 0.9;
+    // eyes: blink; big scared eyes when flying or knocked silly; spiral when dizzy
     this.blink -= dt;
     if (this.blink < -3 - Math.random() * 3) this.blink = 0.12;
-    const eyeScale = this.blink > 0 ? 0.15 : s.s === 2 || s.vy < -8 ? 1.5 : 1;
+    const scared = s.s === 2 || s.vy < -8 || s.vy > 9;
+    const eyeScale = this.blink > 0 ? 0.15 : scared ? 1.6 : 1;
     this.pupils.forEach((p, k) => {
       p.scale.y = 0.08 * eyeScale;
-      p.position.x = (k ? 0.12 : -0.12) + Math.max(-0.03, Math.min(0.03, s.vx * 0.01));
-      p.position.y = 0.07 + Math.max(-0.03, Math.min(0.03, s.vy * 0.005));
+      p.scale.x = 0.065 * (scared ? 1.25 : 1);
+      p.position.x = (k ? 0.12 : -0.12) + (s.s === 2 ? Math.cos(t * 14 + k * Math.PI) * 0.03 : Math.max(-0.03, Math.min(0.03, s.vx * 0.01)));
+      p.position.y = 0.07 + (s.s === 2 ? Math.sin(t * 14 + k * Math.PI) * 0.03 : Math.max(-0.03, Math.min(0.03, s.vy * 0.005)));
     });
-    // feet
-    this.feet.forEach((f, k) => {
-      const ph = this.phase + k * Math.PI;
-      f.position.y = -R * 0.95 + (s.g ? Math.max(0, Math.sin(ph)) * 0.08 : -0.03);
-      f.position.x = (k ? 0.13 : -0.13) + (s.g ? Math.cos(ph) * 0.08 * Math.min(1, speed / 2) : 0);
-    });
-    // arms
-    const shoulderY = 0.02;
+    if (this.dizzy) {
+      this.dizzy.visible = s.s === 2;
+      this.dizzy.rotation.y = t * 6;
+    }
+    // ---- limbs (world space) ----
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
+    const w = (lx: number, ly: number) => new THREE.Vector2(s.x + lx * cos - ly * sin, s.y + lx * sin + ly * cos + this.tilt.position.y);
+    const gravity = 22;
     const holding = s.hx !== undefined && s.hy !== undefined;
-    this.arms.forEach((a, k) => {
+    const airborne = !s.g;
+    for (let k = 0; k < 2; k++) {
       const side = k === 0 ? s.f : -s.f;
-      const sx = side * R * 0.75;
-      a.position.set(sx, shoulderY, 0.05 + (k ? -0.1 : 0.1));
-      let tx: number;
-      let ty: number;
-      if (holding && (k === 0 || s.s === 3 || this.look.shape >= 0)) {
-        tx = s.hx! - s.x - sx;
-        ty = s.hy! - s.y - shoulderY;
-        if (k === 1 && s.s !== 3) {
-          // Second hand helps on cargo, dangles otherwise.
-          tx = s.hx! - s.x - sx * 0.2;
-        }
+      const anchor = w(side * R * 0.78, 0.03);
+      let pin: THREE.Vector2 | undefined;
+      let pull: THREE.Vector2 | undefined;
+      let pullK = 0.12;
+      let kick: THREE.Vector2 | undefined;
+      if (holding && (k === 0 || s.c || s.s === 3)) {
+        // Both hands on the cargo / hanging; the front hand only on a ledge or the rope.
+        const off = k === 0 || !s.c ? 0 : -side * 0.18;
+        pin = new THREE.Vector2(s.hx! + off, s.hy! + (k === 0 ? 0 : 0.05));
+        if (k === 1 && !s.c) pin.addScaledVector(new THREE.Vector2(side * 0.06, -0.05), 1);
       } else if (this.emoteT > 0 && (this.emote === 'cheer' || this.emote === 'highfive')) {
-        tx = side * 0.2;
-        ty = 0.4;
+        pull = w(side * 0.3, 0.75);
+        pullK = 0.4;
       } else if (this.emoteT > 0 && this.emote === 'blame' && k === 0) {
-        tx = side * 0.45;
-        ty = 0.05;
-      } else if (!s.g) {
-        tx = side * 0.25;
-        ty = 0.28 + Math.sin(t * 20 + k) * 0.06; // flail
+        pull = w(side * 0.8, 0.15);
+        pullK = 0.4;
+      } else if (airborne) {
+        // Flail!
+        pull = w(side * 0.45, 0.35 + Math.sin(t * 22 + k * 2) * 0.25);
+        pullK = 0.08;
+        kick = new THREE.Vector2(Math.sin(t * 31 + k) * 6, Math.cos(t * 27 + k * 3) * 6);
       } else {
         const sw = Math.sin(this.phase + k * Math.PI) * Math.min(1, speed / 3);
-        tx = side * 0.12 + sw * 0.12;
-        ty = -0.3;
+        pull = w(side * 0.22 + sw * 0.28 * s.f, -0.28);
+        pullK = 0.06;
       }
-      const len = Math.max(0.12, Math.min(0.75, Math.hypot(tx, ty)));
-      a.scale.set(1, len, 1);
-      a.rotation.z = Math.atan2(-tx, ty);
+      this.arms[k].update(dt, anchor, { gravity, pin, pull, pullK, kick });
+    }
+    for (let k = 0; k < 2; k++) {
+      const side = k === 0 ? -1 : 1;
+      const hip = w(side * 0.12, -R * 0.55);
+      let pull: THREE.Vector2;
+      let pullK = 0.35;
+      let kick: THREE.Vector2 | undefined;
+      if (!airborne) {
+        // Walk cycle: feet step under the hips.
+        const ph = this.phase + k * Math.PI;
+        const stride = Math.min(1, speed / 3);
+        pull = new THREE.Vector2(s.x + side * 0.1 + Math.cos(ph) * 0.2 * stride * s.f, s.y - R - 0.05 + Math.max(0, Math.sin(ph)) * 0.14 * stride);
+      } else {
+        pull = w(side * 0.2, -R - 0.25);
+        pullK = 0.05;
+        kick = new THREE.Vector2(Math.cos(t * 25 + k * 2) * 5, Math.sin(t * 21 + k) * 4);
+      }
+      this.legs[k].update(dt, hip, { gravity, pull, pullK, kick });
+    }
+    // Place the meshes
+    const ox = s.x;
+    const oy = s.y;
+    const limbs = [...this.arms.map((l, k) => ({ l, anchor: w((k === 0 ? s.f : -s.f) * R * 0.78, 0.03), z: 0.08 * (k === 0 ? 1 : -1) })), ...this.legs.map((l, k) => ({ l, anchor: w((k === 0 ? -1 : 1) * 0.12, -R * 0.55), z: 0.08 * (k === 0 ? 1 : -1) }))];
+    limbs.forEach(({ l, anchor, z }, k) => {
+      const [up, lo, end] = this.limbMeshes.slice(k * 3, k * 3 + 3);
+      segment(up, anchor, l.pts[0], ox, oy, z);
+      segment(lo, l.pts[0], l.pts[1], ox, oy, z);
+      end.position.set(l.pts[1].x - ox, l.pts[1].y - oy, z);
+      if (k >= 2) end.rotation.z = Math.atan2(l.pts[1].y - l.pts[0].y, l.pts[1].x - l.pts[0].x) + Math.PI / 2;
     });
     if (this.hatSpin) this.hatSpin.rotation.y = t * (s.g ? 6 : 25);
   }

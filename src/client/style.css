@@ -145,7 +145,7 @@ kbd {
   font-size: 20px;
   text-shadow: 0 2px 0 rgba(0, 0, 0, 0.45), 0 0 6px rgba(0, 0, 0, 0.3);
 }
-.lbl.float.big {
+.lbl.float.huge {
   font-size: 34px;
   letter-spacing: 1px;
 }
@@ -182,6 +182,7 @@ kbd {
 }
 .hud-course,
 .hud-cargo,
+.hud-height,
 .hud-stars {
   background: rgba(255, 250, 240, 0.92);
   border-radius: 14px;

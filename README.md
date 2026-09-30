@@ -4,10 +4,12 @@
 
 A co-op physics comedy for the browser. Two to four toy-sized friends are tied together by a rope and carry something fragile through a giant everyday world: a birthday cake across the kitchen, a fish tank over the bed, and grandma's vase across the playground.
 
-This repository is the playable prototype from the game design document. It has three biomes with three courses each, online crews (quick match and friends rooms) with bots filling the empty seats, solo play with bot buddies, couch co-op, daily and weekly challenge courses, pings and emotes instead of chat, cosmetics, and clip saving.
+This repository is the playable prototype from the game design document. It has three biomes with three flat courses and one tower climb each, online crews (quick match and friends rooms) with bots filling the empty seats, solo play with bot buddies, couch co-op, daily and weekly challenge courses, pings and emotes instead of chat, cosmetics, and clip saving.
 
 ![title screen](docs/menu.png)
 ![carrying the cake](docs/gameplay.png)
+![springboard: the whole crew goes flying](docs/launch.png)
+![bookcase tower](docs/tower.png)
 
 ## Quick start
 
@@ -64,7 +66,9 @@ Two holders lift the cargo properly; one alone can only drag it. Bumps and drops
 | Elastic rope that wraps around objects and can be climbed | ✅ Jointed segments with a hard length limit; climb with up/down while holding |
 | Fragile cargo with a damage meter and quirks | ✅ Cake loses layers, fish tank sloshes, vase is top-heavy, plates slide off a tray (twist) |
 | Checkpoints, respawn with damage, panic grab once per checkpoint | ✅ |
-| Kitchen, kid's bedroom, playground × 3 courses, delivery scenes | ✅ Party, aquarium, grandma |
+| Kitchen, kid's bedroom, playground × 3 courses, delivery scenes | ✅ Party, aquarium, grandma, plus a tower course per biome (Fridge Tower, Bookcase Summit, Tree House) |
+| Verticality | ✅ Springboards (toaster, bed spring, trampoline) that charge up and catapult the whole crew and the cargo; tower floors stacked inside furniture with lifts; a missed landing drops you a floor, dangling from your crew |
+| Ragdoll comedy | ✅ Floppy verlet arms and legs, bobble heads, jelly wobble, flailing in the air; rope yanks, hard landings, knocks and dives send you tumbling (dizzy stars included) |
 | Hazards: stove, tap, cat, toy car, sleeping dog, fan, swings, football, wind | ✅ |
 | Daily and weekly courses with twists (low gravity, heavy cargo, short/long rope, plates, extra fragile) | ✅ Seeded per day/week, same for everyone |
 | Hidden collectibles | ✅ Gold stars on each piece, some off the main path |
@@ -104,7 +108,8 @@ scripts/      headless bot runs and per-piece checks
 ## Notes and known gaps
 
 - Courses currently take 1–4 minutes for a good crew. The GDD targets 8–15, which means adding more pieces per course once the fun is proven.
-- Bot-only crews finish 6 of the 9 campaign courses unaided. On the harder bedroom and playground courses they sometimes need a human to lead past the bridge gap and the tall climbing frame.
+- Bot-only crews usually finish 10 of the 12 courses unaided; it varies run to run because the physics is chaotic. The bedroom bridge gap and the springboards on the higher tower floors sometimes need a human to lead.
+- Springboards aim at their landing spot, so a crew that stands on one together flies together. Stragglers get yanked by the rope, which is the point.
 - Own-character prediction is velocity extrapolation, not full client-side re-simulation. The 150 ms lag budget still needs testing on real school Wi-Fi, as the GDD says.
 - Clips are WebM (MP4 where the browser records it). Safari support depends on the browser's MediaRecorder.
 - The ad and portal hooks are wired, but no ad network is configured on the plain web build: rewarded bonuses are simply granted there.

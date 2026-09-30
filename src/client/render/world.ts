@@ -149,6 +149,17 @@ function solidMesh(s: Solid, i: number): THREE.Object3D | null {
     case 'shelf':
       deep(1.8, -0.4, 0xe0c090, 0.04);
       return g;
+    case 'cupboard':
+      deep(3, -0.6, 0x9cc9d6, 0.03);
+      return g;
+    case 'shelfwall':
+      deep(3, -0.6, 0xc9955c, 0.03);
+      return g;
+    case 'bark': {
+      deep(2.4, -0.4, 0x7a5230, 0.08);
+      for (let y = -h / 2 + 0.4; y < h / 2; y += 0.9) g.add(box(0x5e3d22, w + 0.04, 0.08, 0.2, 0, y, 0.8));
+      return g;
+    }
     case 'toyblock': {
       const c = BLOCK_COLORS[i % BLOCK_COLORS.length];
       g.add(new THREE.Mesh(rbox(w, h, Math.min(1.2, w), 0.06), toon(c)));
@@ -375,6 +386,37 @@ function decorMesh(d: Decor): THREE.Object3D {
       g.add(box(0xb07d4f, 0.15, 0.82, 0.15, 0, 0.41, 0));
       g.add(box(0xb07d4f, 0.15, 0.82, 0.15, 0, 0.41, -1.1));
       break;
+    case 'pantryback':
+    case 'bookback':
+    case 'treeback': {
+      const W = d.s * 1;
+      const c = d.kind === 'pantryback' ? 0xe9d5b0 : d.kind === 'bookback' ? 0xc9955c : 0x6b8f3a;
+      g.scale.setScalar(1);
+      g.add(box(c, W, 22, 0.2, 0, 10, -0.2));
+      for (let y = 1.5; y < 20; y += 2.9) g.add(box(d.kind === 'pantryback' ? 0xd9c29a : 0x5b7d30, W, 0.12, 0.25, 0, y, -0.1));
+      if (d.kind === 'bookback')
+        for (let k = 0; k < W * 1.5; k++) g.add(box(BOOK_COLORS[k % BOOK_COLORS.length], 0.35, 0.9 + (k % 3) * 0.15, 0.6, -W / 2 + 0.5 + k * 0.65, 2.0 + (Math.floor(k / 3) % 3) * 2.9, -0.2));
+      else if (d.kind === 'pantryback')
+        for (let k = 0; k < W / 2; k++) g.add(mesh(CYL(), toon([0xe8a33b, 0xc8324a, 0x7bd389, 0x4dc3ff][k % 4]), -W / 2 + 1 + k * 2, 2.2 + (k % 3) * 2.9, -0.1, 0.3, 0.7, 0.3));
+      else for (let k = 0; k < W / 3; k++) g.add(mesh(SPHERE(), toon(0x4f9e3a), -W / 2 + 1.5 + k * 3, 3 + (k % 3) * 3, -0.3, 1.1, 0.9, 0.4));
+      break;
+    }
+    case 'arrowsign': {
+      g.add(mesh(CYL(), toon(0x8b5a2b), 0, -0.9, 0, 0.06, 1.8, 0.06));
+      const m = signMesh(d.text ?? '', 2.2, 0.6, '#ffe066', '#b02e2e');
+      m.position.y = 0.1;
+      g.add(m);
+      break;
+    }
+    case 'liftframe': {
+      const hgt = d.s ?? 5;
+      g.scale.setScalar(1);
+      g.add(box(0x666f78, 0.12, hgt, 0.12, -1.7, hgt / 2, 0));
+      g.add(box(0x666f78, 0.12, hgt, 0.12, 1.7, hgt / 2, 0));
+      g.add(box(0x666f78, 3.6, 0.15, 0.4, 0, hgt, 0));
+      g.add(mesh(CYL(), toon(0x444444), 0, hgt, 0.3, 0.35, 0.2, 0.35).rotateX(Math.PI / 2));
+      break;
+    }
     case 'shelfback':
       g.add(box(0xd9b27c, 10, 6, 0.2, 0, 2.5, -0.8));
       break;
@@ -525,6 +567,36 @@ export function buildWorld(course: CourseDef, scene: THREE.Scene): WorldView {
     if (o.name === 'cloud') clouds.push(o);
   });
 
+  // Springboards: toaster, bed spring or trampoline. They squash as they charge and fire with a BOING.
+  const pads: { top: THREE.Object3D; base: number; z: (typeof course.zones)[number]; kick: number }[] = [];
+  course.zones.forEach((z) => {
+    if (z.kind !== 'launch') return;
+    const g = new THREE.Group();
+    const floor = z.y - z.h / 2;
+    g.position.set(z.x, floor, 0);
+    const top = new THREE.Group();
+    if (z.tag === 'toaster') {
+      g.add(new THREE.Mesh(rbox(z.w + 0.3, 0.9, 1.6, 0.25), toon(0xd6dde4)));
+      g.children[0].position.y = -0.46;
+      g.add(box(0x333333, 0.15, 0.25, 0.15, z.w / 2 + 0.2, -0.3, 0.6));
+      top.add(new THREE.Mesh(rbox(z.w - 0.2, 0.16, 1.2, 0.07), toon(0xd9a066)));
+      top.add(box(0x9b5b3a, z.w - 0.3, 0.02, 1.1, 0, 0.09, 0));
+    } else if (z.tag === 'trampoline') {
+      for (const x of [-z.w / 2, z.w / 2]) g.add(box(0x2b6cb0, 0.12, 0.5, 0.12, x, -0.25, 0));
+      top.add(box(0x222222, z.w, 0.05, 1.4, 0, 0, 0));
+      top.add(mesh(geo('ring', () => new THREE.TorusGeometry(1, 0.12, 6, 24)), toon(0x4dc3ff), 0, 0, 0, z.w / 2, 0.7, 0.2).rotateX(Math.PI / 2));
+    } else {
+      for (let k = 0; k < 4; k++) g.add(mesh(geo('coil', () => new THREE.TorusGeometry(1, 0.08, 6, 20)), toon(0x9aa5b1), 0, -0.1 - k * 0.1, 0, z.w * 0.35, 0.3, 0.3).rotateX(Math.PI / 2));
+      top.add(new THREE.Mesh(rbox(z.w, 0.14, 1.4, 0.06), toon(0xff5a7a)));
+    }
+    g.add(top);
+    const arrow = mesh(CONE(), toonUnique(0xffe066, { emissive: 0x665500 }), 0, 1.2, 0, 0.25, 0.4, 0.25);
+    arrow.name = 'padarrow';
+    g.add(arrow);
+    root.add(g);
+    pads.push({ top, base: 0, z, kick: 0 });
+  });
+
   // Zones: burners glow, taps pour, puddles shimmer.
   const zoneViews: { i: number; obj: THREE.Object3D; kind: string; mat?: THREE.MeshToonMaterial }[] = [];
   course.zones.forEach((z, i) => {
@@ -563,6 +635,11 @@ export function buildWorld(course: CourseDef, scene: THREE.Scene): WorldView {
       const p = m.path.type === 'pendulum' ? m.path.len : 5;
       g.add(mesh(CYL(), toon(0x999999), -m.w / 2 + 0.1, p / 2, 0, 0.03, p, 0.03));
       g.add(mesh(CYL(), toon(0x999999), m.w / 2 - 0.1, p / 2, 0, 0.03, p, 0.03));
+    } else if (m.kind === 'lift') {
+      g.add(new THREE.Mesh(rbox(m.w, m.h, 1.4, 0.05), toon(0xffc53d)));
+      for (let x = -m.w / 2 + 0.3; x < m.w / 2; x += 0.6) g.add(box(0x333333, 0.25, 0.02, 1.2, x, m.h / 2 + 0.01, 0));
+      const cable = mesh(CYL(), toon(0x333333), 0, 10, 0, 0.03, 20, 0.03);
+      g.add(cable);
     } else if (m.kind === 'dog') {
       g.add(mesh(SPHERE(), toon(0xc58f5a), 0, 0, 0, m.w / 2, m.h / 2 + 0.05, 1.1));
       g.add(mesh(SPHERE(), toon(0x8a5a3a), -0.6, 0.3, 0.9, 0.7, 0.35, 0.3));
@@ -644,7 +721,15 @@ export function buildWorld(course: CourseDef, scene: THREE.Scene): WorldView {
 
   return {
     root,
-    update(s, t) {
+    update(s, t, dt) {
+      pads.forEach((p, k) => {
+        const load = s.pl?.[k] ?? 0;
+        if (s.events.some((e) => e.e === 'boing' && Math.abs(e.x - p.z.x) < p.z.w / 2 + 0.5 && Math.abs(e.y - (p.z.y - p.z.h / 2)) < 1)) p.kick = 1;
+        p.kick = Math.max(0, p.kick - dt * 3);
+        p.top.position.y = -load * 0.18 + Math.sin(p.kick * Math.PI) * 0.6;
+        const arrow = p.top.parent?.getObjectByName('padarrow');
+        if (arrow) arrow.position.y = 1.2 + Math.sin(t * 5) * 0.15;
+      });
       zoneViews.forEach((z) => {
         const on = !!(s.zonesOn & (1 << z.i));
         if (z.kind === 'burner' && z.mat) {
